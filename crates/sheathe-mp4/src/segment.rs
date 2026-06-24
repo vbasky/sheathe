@@ -13,7 +13,7 @@ use crate::box_writer::{BoxWriter, FourCc};
 use crate::demux::Track;
 use crate::fragmenter::Segment;
 use sheathe_core::{Codec, MediaKind, SampleFlags};
-use sheathe_crypto::{ContentKey, Encryptor, Pattern, Scheme, Subsample};
+use sheathe_crypto::{ContentKey, Encryptor, Pattern, ProtectionSystem, Scheme, Subsample};
 
 /// CENC encryption parameters for a packaging run.
 pub struct Encryption {
@@ -25,6 +25,11 @@ pub struct Encryption {
     /// Constant IV used by `cbcs` (stored in `tenc`, reused for every sample).
     /// Ignored by the per-sample-IV schemes.
     pub constant_iv: [u8; 16],
+    /// DRM systems to emit a `pssh` box for (e.g. Common, Widevine, PlayReady).
+    pub systems: Vec<ProtectionSystem>,
+    /// Crypto-period duration in seconds for key rotation, or `None` to use one
+    /// key for the whole asset.
+    pub crypto_period_seconds: Option<f64>,
 }
 
 impl Encryption {
@@ -32,6 +37,23 @@ impl Encryption {
     /// a constant IV), 16 for the per-sample-IV schemes.
     fn per_sample_iv_size(&self) -> u8 {
         if self.scheme.uses_constant_iv() { 0 } else { 16 }
+    }
+
+    /// The crypto-period index for a segment starting at `start_ticks` (in
+    /// `timescale` units), or `None` when key rotation is disabled. The period
+    /// is `floor(start_seconds / crypto_period_seconds)`.
+    fn period_for(&self, start_ticks: u64, timescale: u32) -> Option<u32> {
+        let p = self.crypto_period_seconds?;
+        let start_s = start_ticks as f64 / f64::from(timescale.max(1));
+        Some((start_s / p).floor() as u32)
+    }
+
+    /// The content key for `period` (left-rotated for rotation), or the base key.
+    fn key_for(&self, period: Option<u32>) -> ContentKey {
+        match period {
+            Some(p) => self.key.rotated(p),
+            None => self.key.clone(),
+        }
     }
 }
 
@@ -41,11 +63,6 @@ impl Encryption {
 fn track_pattern(enc: &Encryption, kind: MediaKind) -> Pattern {
     if enc.scheme.is_pattern() && kind == MediaKind::Video { Pattern::VIDEO } else { Pattern::NONE }
 }
-
-/// Common PSSH SystemID (`urn:mpeg:dash:mp4protection` / W3C clear-key family).
-const COMMON_SYSTEM_ID: [u8; 16] = [
-    0x10, 0x77, 0xef, 0xec, 0xc0, 0xb2, 0x4d, 0x02, 0xac, 0xe3, 0x3c, 0x1e, 0x52, 0xe2, 0xfb, 0x4b,
-];
 
 /// Per-sample encryption result: IV, subsample layout, and encrypted bytes.
 struct SampleEnc {
@@ -93,9 +110,13 @@ pub fn write_media_segment(
     first_sample_index: u64,
     enc: Option<&Encryption>,
 ) -> Vec<u8> {
-    let enc_samples = enc.map(|e| encrypt_segment(track, segment, first_sample_index, e));
+    // Crypto period for this segment (None unless key rotation is enabled).
+    let period = enc.and_then(|e| e.period_for(segment.start_ticks, track.info.timescale.0));
+    let enc_samples =
+        enc.map(|e| encrypt_segment(track, segment, first_sample_index, e, period));
     let iv_size = enc.map_or(0, Encryption::per_sample_iv_size);
-    let moof = build_moof(track, sequence_number, segment, enc_samples.as_deref(), iv_size);
+    let moof =
+        build_moof(track, sequence_number, segment, enc_samples.as_deref(), iv_size, enc, period);
     let mdat = build_mdat(segment, enc_samples.as_deref());
     let referenced_size = (moof.len() + mdat.len()) as u32;
     let sidx = build_sidx(track, segment, referenced_size);
@@ -139,8 +160,15 @@ fn write_moov(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>) {
 
     write_trak(w, track, enc);
 
+    // One `pssh` box per requested DRM system, appended verbatim into `moov`.
+    // Under key rotation the `pssh` boxes move into each segment's `moof`
+    // instead (one per period, with that period's KID).
     if let Some(e) = enc {
-        write_pssh(w, e);
+        if e.crypto_period_seconds.is_none() {
+            for system in &e.systems {
+                w.bytes(&system.pssh_box(&e.key, e.scheme));
+            }
+        }
     }
 
     // mvex > trex
@@ -301,7 +329,12 @@ fn build_moof(
     segment: &Segment,
     enc_samples: Option<&[SampleEnc]>,
     per_sample_iv_size: u8,
+    enc: Option<&Encryption>,
+    period: Option<u32>,
 ) -> Vec<u8> {
+    // Key rotation: this segment carries the period's rotated key/KID, signalled
+    // per-sample via a `seig` sample group and a per-segment `pssh`.
+    let rotation = enc.zip(period);
     // Composition offsets are only needed when any sample is reordered (B-frames).
     let any_cts = segment.samples.iter().any(|s| s.pts != s.dts);
 
@@ -377,11 +410,26 @@ fn build_moof(
     }
     w.end(); // trun
 
+    // `seig` sample group: maps every sample to this crypto period's KID.
+    if let Some((e, p)) = rotation {
+        write_seig_groups(&mut w, e, p, segment.samples.len() as u32, track.info.kind);
+    }
+
     if let Some(samples) = enc_samples {
         write_senc(&mut w, samples, per_sample_iv_size);
     }
 
     w.end(); // traf
+
+    // Under rotation, the per-period `pssh` boxes live in each `moof` (carrying
+    // the rotated KID) rather than once in the init `moov`.
+    if let Some((e, p)) = rotation {
+        let key = e.key.rotated(p);
+        for system in &e.systems {
+            w.bytes(&system.pssh_box(&key, e.scheme));
+        }
+    }
+
     w.end(); // moof
 
     let mut bytes = w.into_bytes();
@@ -514,7 +562,13 @@ fn write_tenc(w: &mut BoxWriter, enc: &Encryption, pattern: Pattern) {
     }
     w.u8(1); // default_isProtected
     w.u8(if constant_iv { 0 } else { 16 }); // default_Per_Sample_IV_Size
-    w.bytes(&enc.key.kid);
+    // Under key rotation the default KID is zero; the real per-period KID is
+    // carried per segment in the `seig` sample group.
+    if enc.crypto_period_seconds.is_some() {
+        w.bytes(&[0u8; 16]);
+    } else {
+        w.bytes(&enc.key.kid);
+    }
     if constant_iv {
         w.u8(16); // default_constant_IV_size
         w.bytes(&enc.constant_iv);
@@ -522,25 +576,65 @@ fn write_tenc(w: &mut BoxWriter, enc: &Encryption, pattern: Pattern) {
     w.end();
 }
 
-/// A `pssh` for the Common (clear-key family) system, listing the KID.
-fn write_pssh(w: &mut BoxWriter, enc: &Encryption) {
-    w.begin(fcc(b"pssh"));
-    full(w, 1, 0); // version 1 carries a KID list
-    w.bytes(&COMMON_SYSTEM_ID);
-    w.u32(1); // KID_count
-    w.bytes(&enc.key.kid);
-    w.u32(0); // DataSize
+/// `sbgp` + `sgpd` (`seig`) sample groups for key rotation: every sample in the
+/// segment maps to a single `CencSampleEncryptionInformationGroupEntry` carrying
+/// this period's rotated KID (and the scheme's pattern / constant IV, mirroring
+/// `tenc`).
+fn write_seig_groups(
+    w: &mut BoxWriter,
+    enc: &Encryption,
+    period: u32,
+    sample_count: u32,
+    kind: MediaKind,
+) {
+    let kid = enc.key.rotated(period).kid;
+    let pattern = track_pattern(enc, kind);
+    let constant_iv = enc.scheme.uses_constant_iv();
+    let iv_size = if constant_iv { 0 } else { 16 };
+    let pattern_byte =
+        if enc.scheme.is_pattern() { (pattern.crypt_blocks << 4) | (pattern.skip_blocks & 0x0f) }
+        else { 0 };
+    // Entry length: reserved + pattern + isProtected + iv_size + KID, plus the
+    // constant IV (size byte + 16) when the scheme uses one.
+    let entry_len: u32 = if constant_iv { 1 + 1 + 1 + 1 + 16 + 1 + 16 } else { 1 + 1 + 1 + 1 + 16 };
+
+    // sbgp: all `sample_count` samples reference group description index 1.
+    w.begin(fcc(b"sbgp"));
+    full(w, 0, 0);
+    w.bytes(b"seig");
+    w.u32(1); // entry_count
+    w.u32(sample_count);
+    w.u32(1); // group_description_index (1-based into sgpd)
+    w.end();
+
+    // sgpd: one seig entry describing this period's protection.
+    w.begin(fcc(b"sgpd"));
+    full(w, 1, 0); // version 1 carries default_length
+    w.bytes(b"seig");
+    w.u32(entry_len);
+    w.u32(1); // entry_count
+    w.u8(0); // reserved
+    w.u8(pattern_byte);
+    w.u8(1); // isProtected
+    w.u8(iv_size);
+    w.bytes(&kid);
+    if constant_iv {
+        w.u8(16);
+        w.bytes(&enc.constant_iv);
+    }
     w.end();
 }
 
 /// Encrypt every sample of a segment, returning IV + subsamples + ciphertext.
+/// Under key rotation, `period` selects this segment's rotated content key.
 fn encrypt_segment(
     track: &Track,
     segment: &Segment,
     first_sample_index: u64,
     enc: &Encryption,
+    period: Option<u32>,
 ) -> Vec<SampleEnc> {
-    let encryptor = Encryptor::new(&enc.key.key);
+    let encryptor = Encryptor::new(&enc.key_for(period).key);
     let nal_len =
         crate::codecs::nal_unit_length_size(&sample_entry_fourcc(track), sample_entry_body(track))
             .unwrap_or(4);

@@ -10,7 +10,7 @@ mod banner;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sheathe_core::{MediaKind, Scaled, StreamInfo};
-use sheathe_crypto::{ContentKey, Scheme};
+use sheathe_crypto::{ContentKey, ProtectionSystem, Scheme};
 use sheathe_dash::{Manifest, Protection, Representation};
 use sheathe_hls::{KeyInfo, SegmentRef, Variant, master_playlist, media_playlist};
 use sheathe_mp4::{
@@ -21,7 +21,12 @@ use std::path::Path;
 
 /// Pure-Rust HLS/DASH/CMAF media packager.
 #[derive(Debug, Parser)]
-#[command(name = "sheathe", version, about, long_about = None)]
+#[command(
+    name = "sheathe",
+    version,
+    about = "Pure-Rust HLS/DASH/CMAF media packager",
+    long_about = None
+)]
 struct Cli {
     /// Suppress the startup banner.
     #[arg(long, global = true)]
@@ -55,6 +60,11 @@ enum Command {
         /// 32 hex chars).
         #[arg(long, value_name = "KID:KEY")]
         enc_key: Option<String>,
+        /// Read the raw key from a file (a `<KID hex>:<KEY hex>` line; `#`
+        /// comments and blank lines ignored). Takes precedence over `--enc-key`
+        /// and keeps the key out of the process arguments.
+        #[arg(long, value_name = "PATH")]
+        enc_key_file: Option<String>,
         /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR),
         /// `cens` (AES-CTR pattern), `cbc1` (AES-CBC) or `cbcs` (AES-CBC pattern).
         #[arg(long, default_value = "cenc")]
@@ -62,6 +72,15 @@ enum Command {
         /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
         #[arg(long, default_value = "key.bin")]
         enc_key_uri: String,
+        /// DRM systems to emit `pssh` boxes for (comma-separated): any of
+        /// `common`, `widevine`, `playready`.
+        #[arg(long, default_value = "common")]
+        protection_systems: String,
+        /// Enable key rotation with this crypto-period duration in seconds. Each
+        /// period uses a key derived from the base key; signalled per segment via
+        /// `seig` sample groups and per-period `pssh`.
+        #[arg(long, value_name = "SECONDS")]
+        crypto_period_duration: Option<f64>,
     },
     /// Probe an input and print the streams sheathe detects.
     Probe {
@@ -86,15 +105,25 @@ pub fn run() -> Result<()> {
             dash,
             hls,
             enc_key,
+            enc_key_file,
             enc_scheme,
             enc_key_uri,
+            protection_systems,
+            crypto_period_duration,
         } => cmd_package(
             &inputs,
             &out,
             segment_duration,
             dash,
             hls,
-            EncryptionOpts { key: enc_key.as_deref(), scheme: &enc_scheme, key_uri: &enc_key_uri },
+            EncryptionOpts {
+                key: enc_key.as_deref(),
+                key_file: enc_key_file.as_deref(),
+                scheme: &enc_scheme,
+                key_uri: &enc_key_uri,
+                systems: &protection_systems,
+                crypto_period: crypto_period_duration,
+            },
         )?,
         Command::Probe { input } => cmd_probe(&input)?,
     }
@@ -122,10 +151,16 @@ fn cmd_probe(input: &str) -> Result<()> {
 struct EncryptionOpts<'a> {
     /// `<KID hex>:<KEY hex>` raw key, or `None` for clear output.
     key: Option<&'a str>,
+    /// Path to a file holding the raw key; takes precedence over `key`.
+    key_file: Option<&'a str>,
     /// `cenc`, `cens`, `cbc1` or `cbcs`.
     scheme: &'a str,
     /// HLS `#EXT-X-KEY` delivery URI.
     key_uri: &'a str,
+    /// Comma-separated DRM systems to emit `pssh` boxes for.
+    systems: &'a str,
+    /// Key-rotation crypto-period duration in seconds, or `None` for one key.
+    crypto_period: Option<f64>,
 }
 
 fn cmd_package(
@@ -138,7 +173,14 @@ fn cmd_package(
 ) -> Result<()> {
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir).with_context(|| format!("creating {out}/"))?;
-    let encryption = enc.key.map(|k| parse_enc_key(k, enc.scheme)).transpose()?;
+    // The key file (if given) wins over an inline --enc-key.
+    let key_spec = match enc.key_file {
+        Some(path) => Some(read_key_file(path)?),
+        None => enc.key.map(str::to_string),
+    };
+    let encryption = key_spec
+        .map(|k| parse_enc_key(&k, enc.scheme, enc.systems, enc.crypto_period))
+        .transpose()?;
 
     // HLS `#EXT-X-KEY` signalling for encrypted output.
     let hls_key = encryption.as_ref().map(|_| KeyInfo {
@@ -174,6 +216,10 @@ fn cmd_package(
             _ => "cenc (AES-128-CTR)",
         };
         println!("  encryption = {alg}");
+        println!("  protection_systems = {}", enc.systems);
+        if let Some(p) = enc.crypto_period {
+            println!("  key_rotation = every {p}s (crypto period)");
+        }
     }
 
     let policy = SegmentPolicy { target_seconds: segment_duration, keyframes_only: true };
@@ -282,8 +328,14 @@ fn cmd_package(
     Ok(())
 }
 
-/// Parse a `<KID hex>:<KEY hex>` raw-key spec + scheme name into an [`Encryption`].
-fn parse_enc_key(spec: &str, scheme: &str) -> Result<Encryption> {
+/// Parse a `<KID hex>:<KEY hex>` raw-key spec, scheme name, and DRM-system list
+/// into an [`Encryption`].
+fn parse_enc_key(
+    spec: &str,
+    scheme: &str,
+    systems: &str,
+    crypto_period: Option<f64>,
+) -> Result<Encryption> {
     let (kid_hex, key_hex) =
         spec.split_once(':').context("--enc-key must be <KID hex>:<KEY hex>")?;
     let kid = parse_hex16(kid_hex).context("invalid KID")?;
@@ -297,13 +349,48 @@ fn parse_enc_key(spec: &str, scheme: &str) -> Result<Encryption> {
             anyhow::bail!("unknown --enc-scheme '{other}' (expected cenc, cens, cbc1 or cbcs)")
         }
     };
+    let systems = parse_protection_systems(systems)?;
     // A fixed, asset-wide constant IV for cbcs (cenc derives per-sample IVs and
     // ignores this).
     let constant_iv = [
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
         0xff,
     ];
-    Ok(Encryption { scheme, key: ContentKey { kid, key }, constant_iv })
+    if let Some(p) = crypto_period {
+        anyhow::ensure!(p > 0.0, "--crypto-period-duration must be positive");
+    }
+    Ok(Encryption {
+        scheme,
+        key: ContentKey { kid, key },
+        constant_iv,
+        systems,
+        crypto_period_seconds: crypto_period,
+    })
+}
+
+/// Read a raw key from a file: the first `<KID hex>:<KEY hex>` line, ignoring
+/// blank lines and `#` comments.
+fn read_key_file(path: &str) -> Result<String> {
+    let content = fs::read_to_string(path).with_context(|| format!("reading key file {path}"))?;
+    content
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .find(|line| line.contains(':'))
+        .map(str::to_string)
+        .with_context(|| format!("no <KID hex>:<KEY hex> entry in key file {path}"))
+}
+
+/// Parse a comma-separated DRM-system list (e.g. `common,widevine,playready`).
+fn parse_protection_systems(list: &str) -> Result<Vec<ProtectionSystem>> {
+    list.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|name| {
+            ProtectionSystem::parse(name).with_context(|| {
+                format!("unknown protection system '{name}' (expected common, widevine, playready)")
+            })
+        })
+        .collect()
 }
 
 /// Parse exactly 32 hex chars into a 16-byte array.

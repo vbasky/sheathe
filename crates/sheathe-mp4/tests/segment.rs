@@ -86,7 +86,7 @@ fn index_of(data: &[u8], needle: &[u8]) -> usize {
 
 #[test]
 fn encrypted_segment_has_cenc_boxes_and_aux_offset() {
-    use sheathe_crypto::{ContentKey, Scheme};
+    use sheathe_crypto::{ContentKey, ProtectionSystem, Scheme};
     use sheathe_mp4::Encryption;
 
     let mp4 = build_mp4();
@@ -99,6 +99,8 @@ fn encrypted_segment_has_cenc_boxes_and_aux_offset() {
         scheme: Scheme::Cenc,
         key: ContentKey { kid: [0x11; 16], key: [0x22; 16] },
         constant_iv: [0; 16],
+        systems: vec![ProtectionSystem::Common],
+        crypto_period_seconds: None,
     };
 
     // Init switches the sample entry to encv and carries tenc + pssh.
@@ -120,4 +122,38 @@ fn encrypted_segment_has_cenc_boxes_and_aux_offset() {
     let moof_start = index_of(&media, b"moof") - 4; // box size precedes the type
     let senc_aux = index_of(&media, b"senc") + 12;
     assert_eq!(moof_start + off, senc_aux, "saio must point at senc aux data");
+}
+
+#[test]
+fn key_rotation_emits_seig_groups_and_zero_tenc_kid() {
+    use sheathe_crypto::{ContentKey, ProtectionSystem, Scheme};
+    use sheathe_mp4::Encryption;
+
+    let mp4 = build_mp4();
+    let demux = Mp4Demuxer::parse(&mp4).expect("parse");
+    let track = &demux.tracks()[0];
+    let samples = demux.samples(0).expect("samples");
+    let segments = fragment(&track.info, samples, SegmentPolicy::default()).expect("fragment");
+
+    let enc = Encryption {
+        scheme: Scheme::Cenc,
+        key: ContentKey { kid: [0x11; 16], key: [0x22; 16] },
+        constant_iv: [0; 16],
+        systems: vec![ProtectionSystem::Widevine],
+        crypto_period_seconds: Some(0.0001), // tiny period so rotation is active
+    };
+
+    // Rotation moves the pssh out of the init; the tenc default KID is zeroed.
+    let init = write_init_segment(track, Some(&enc));
+    assert!(!init.windows(4).any(|w| w == b"pssh"), "init must not carry pssh when rotating");
+    let tenc = index_of(&init, b"tenc");
+    let kid = &init[tenc + 4 + 4 + 4..tenc + 4 + 4 + 4 + 16]; // type+ver/flags+(rsv,rsv,prot,iv)
+    assert_eq!(kid, &[0u8; 16], "rotating tenc default KID is zero");
+
+    // The media segment carries the seig sample group and a per-period pssh.
+    let media = write_media_segment(track, 1, &segments[0], 0, Some(&enc));
+    let traf = find(&media, b"moof").child(b"traf").unwrap().unwrap();
+    assert!(traf.child(b"sbgp").unwrap().is_some(), "sbgp present");
+    assert!(traf.child(b"sgpd").unwrap().is_some(), "sgpd present");
+    assert!(media.windows(4).any(|w| w == b"pssh"), "per-segment pssh present");
 }

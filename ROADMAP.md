@@ -44,9 +44,12 @@ Legend: ✅ done · 🟡 in progress · ⬜ planned.
 (DASH on-demand `SegmentBase`/byte-range single-file output → Phase 5;
 WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
 
-## Phase 2 — Encryption & DRM 🟡
+## Phase 2 — Encryption & DRM ✅
 
-`cenc` shipped as part of Phase 1 (VOD core). Remaining DRM breadth:
+`cenc` shipped as part of Phase 1 (VOD core); the rest of the DRM breadth — the
+full CENC scheme matrix, multi-DRM `pssh`, key rotation, and key-file input — is
+now complete and oracle-verified. The only deferred item is live network key
+servers (an external-service dependency, see below).
 
 - ✅ **CENC `cbcs` (AES-128-CBC, pattern 1:9)**: AES-CBC pattern core (NIST-tested);
   constant-IV `tenc` v1, pattern `senc`, `cbcs` `schm`. **ffmpeg decrypt+decode
@@ -61,8 +64,22 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
   only; audio is whole-sample (no subsamples) under all schemes, per Shaka /
   DASH-IF. **`tenc`/`senc` structurally diffed against Shaka Packager; all four
   schemes ffmpeg decrypt+decode verified (video + audio frame md5).**
-- ⬜ Key sources beyond raw key: Widevine key server, PlayReady, key files.
-- ⬜ Multi-DRM `pssh` (Widevine + PlayReady + common) and key rotation.
+- ✅ **Multi-DRM `pssh`** (Widevine + PlayReady + Common) via `--protection-systems`.
+  Widevine protobuf, PlayReady `WRMHEADER` 4.0.0.0 (swapped-GUID KID + AES-ECB
+  checksum), Common v1 KID list — all generated from the raw key. **Each box
+  byte-matches Shaka Packager's `--protection_systems` output.**
+- ✅ **Key rotation** (`--crypto-period-duration`): per-period keys derived by
+  left-rotating the base key (Shaka's naive raw-key scheme), signalled per
+  segment with `seig` (`sbgp`/`sgpd`) sample groups + a zero-KID init `tenc` +
+  per-period `pssh` in each `moof`. Box format matches Shaka; every segment
+  decrypts to the clear baseline under its derived key. (sheathe maps periods
+  straight from segment time, `floor(t/period)`, rather than replicating Shaka's
+  one-segment prefetch lag.)
+- ✅ **Key file source** (`--enc-key-file`) — raw key from a file, keeping it out
+  of the process arguments.
+- ⬜ Network key servers (Widevine / PlayReady): require client certificates and
+  a live server endpoint, so they can't be implemented or oracle-verified in
+  this hermetic setup — deferred as an external-service dependency.
 
 ## Phase 3 — Inputs & codecs ⬜
 
@@ -102,10 +119,12 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
 
 ## Current focus
 
-**Phase 1 is complete**, and Phase 2's CENC scheme matrix is now **fully
-implemented**: `cenc`, `cbcs`, `cbc1`, and `cens` all ship end-to-end, each
-structurally diffed against Shaka Packager and ffmpeg decrypt+decode verified.
-Remaining Phase 2 breadth is DRM key sources (Widevine/PlayReady/key files) and
-multi-DRM `pssh` + key rotation. Next up is the rest of **Phase 2** (broader
-DRM) or **Phase 3** (more
-inputs/codecs — MPEG-TS, WebM, additional audio) — to be picked next.
+**Phases 1 and 2 are complete.** The CENC scheme matrix (`cenc`/`cbcs`/`cbc1`/
+`cens`), multi-DRM `pssh` (Widevine + PlayReady + Common), key rotation, and
+key-file input all ship end-to-end, structurally diffed against Shaka Packager
+and ffmpeg decrypt+decode verified. The only Phase 2 item left is live network
+key servers, deferred as an external-service dependency that can't be
+oracle-verified in a hermetic setup.
+
+Next up is **Phase 3** — more inputs and codecs (MPEG-TS demux, WebM/Matroska,
+raw elementary streams, additional audio codecs, and WebVTT/TTML text).

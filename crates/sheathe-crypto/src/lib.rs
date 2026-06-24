@@ -26,6 +26,9 @@ use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockEncrypt, KeyInit};
 use sheathe_core::{Error, Result};
 
+mod pssh;
+pub use pssh::ProtectionSystem;
+
 /// A CENC protection scheme (the `schm` `scheme_type`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Scheme {
@@ -100,6 +103,22 @@ pub struct ContentKey {
     pub kid: [u8; 16],
     /// The 16-byte AES content key.
     pub key: [u8; 16],
+}
+
+impl ContentKey {
+    /// The key and KID for crypto period `period`, derived by left-rotating both
+    /// by `period % 16` bytes — the naive scheme Shaka Packager uses for raw-key
+    /// rotation. Period 0 returns the key unchanged.
+    pub fn rotated(&self, period: u32) -> ContentKey {
+        let n = (period % 16) as usize;
+        let mut kid = [0u8; 16];
+        let mut key = [0u8; 16];
+        for i in 0..16 {
+            kid[i] = self.kid[(i + n) % 16];
+            key[i] = self.key[(i + n) % 16];
+        }
+        ContentKey { kid, key }
+    }
 }
 
 /// A contiguous run within a sample: `clear` plaintext bytes followed by
@@ -367,6 +386,19 @@ mod tests {
             &[Subsample { clear: 0, protected: 9 }],
         );
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn content_key_rotation_left_rotates_by_period() {
+        let base = ContentKey { kid: KEY, key: KEY };
+        assert_eq!(base.rotated(0).kid, KEY, "period 0 is unchanged");
+        // Period 1 left-rotates by one byte.
+        let mut expect = KEY;
+        expect.rotate_left(1);
+        assert_eq!(base.rotated(1).kid, expect);
+        assert_eq!(base.rotated(1).key, expect);
+        // Period 16 wraps back to the original.
+        assert_eq!(base.rotated(16).kid, KEY);
     }
 
     #[test]

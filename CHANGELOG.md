@@ -13,6 +13,18 @@ All notable changes to **sheathe** are documented here. The format is based on
   encryption. `tenc` version, crypt/skip pattern bytes, and `senc` subsample
   signalling were differentially matched against Shaka Packager, and every
   scheme is ffmpeg decrypt+decode verified (video + audio frame md5).
+- **Multi-DRM `pssh`** (`--protection-systems common,widevine,playready`):
+  Widevine (`WidevinePsshData` protobuf), PlayReady (a `WRMHEADER` 4.0.0.0
+  PlayReady Object with swapped-GUID KID and AES-ECB checksum), and Common (v1
+  KID list), all generated from the raw key. Each box **byte-matches** Shaka
+  Packager's `--protection_systems` output.
+- **Key rotation** (`--crypto-period-duration <seconds>`): per-period content
+  keys derived by left-rotating the base key (Shaka's naive raw-key scheme),
+  signalled per segment via `seig` (`sbgp`/`sgpd`) sample groups, a zero-KID
+  init `tenc`, and a per-period `pssh` in each `moof`. Box format matches Shaka;
+  each segment decrypts to the clear baseline under its derived key.
+- **Key-file input** (`--enc-key-file <path>`): reads the raw `KID:KEY` from a
+  file (with `#` comments), keeping the key out of the process arguments.
 
 ### Changed
 - **Pattern encryption is now video-only**, matching Shaka / DASH-IF: under
