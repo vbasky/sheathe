@@ -6,6 +6,11 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Updated **`aes` to 0.9** (RustCrypto `cipher` 0.5; `generic-array` →
+  `hybrid-array`). No behavioural change — AES-CTR/CBC/ECB outputs verified
+  identical, MSRV unchanged (1.85).
+
 ## [0.2.0] — 2026-06-25
 
 ### Added

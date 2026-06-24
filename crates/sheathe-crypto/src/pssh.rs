@@ -15,8 +15,7 @@
 
 use crate::{ContentKey, Scheme};
 use aes::Aes128;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
 
 /// Common (clear-key family) System ID — `urn:mpeg:dash:mp4protection`.
 const COMMON_SYSTEM_ID: [u8; 16] = [
@@ -162,8 +161,8 @@ fn playready_guid(kid: &[u8; 16]) -> [u8; 16] {
 /// PlayReady header checksum: the first 8 bytes of AES-128-ECB encrypting the
 /// (GUID-ordered) `KID` with the content key.
 fn playready_checksum(key: &[u8; 16], guid_kid: &[u8; 16]) -> [u8; 8] {
-    let cipher = Aes128::new(GenericArray::from_slice(key));
-    let mut block = GenericArray::clone_from_slice(guid_kid);
+    let cipher = Aes128::new_from_slice(key).expect("AES-128 key is 16 bytes");
+    let mut block = (*guid_kid).into();
     cipher.encrypt_block(&mut block);
     block[..8].try_into().unwrap()
 }
