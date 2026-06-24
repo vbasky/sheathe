@@ -1,0 +1,42 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sheathe-core",
+    "crates/sheathe-mp4",
+    "crates/sheathe-dash",
+    "crates/sheathe-hls",
+    "crates/sheathe-crypto",
+    "crates/sheathe-cli",
+]
+
+# Shared package metadata, inherited by every crate via `field.workspace = true`.
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+# Real consumer MSRV — CI reads this exact value out of Cargo.toml.
+rust-version = "1.82"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/vbasky/sheathe"
+authors = ["Vikram Bhaskaran <vikram.bhaskaran@outlook.com>"]
+description = "Pure-Rust HLS/DASH/CMAF media packager (oracle: Shaka Packager)"
+keywords = ["dash", "hls", "cmaf", "packager", "streaming"]
+categories = ["multimedia", "multimedia::video", "command-line-utilities"]
+
+[workspace.dependencies]
+# Internal crates (path deps, version-pinned for crates.io publication).
+sheathe-core = { version = "0.1.0", path = "crates/sheathe-core" }
+sheathe-mp4 = { version = "0.1.0", path = "crates/sheathe-mp4" }
+sheathe-dash = { version = "0.1.0", path = "crates/sheathe-dash" }
+sheathe-hls = { version = "0.1.0", path = "crates/sheathe-hls" }
+sheathe-crypto = { version = "0.1.0", path = "crates/sheathe-crypto" }
+
+# External.
+thiserror = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Pure-Rust AES block cipher (RustCrypto); CTR/CBC modes implemented in-crate.
+aes = "0.8"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

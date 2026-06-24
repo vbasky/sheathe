@@ -1,0 +1,15 @@
+[package]
+name = "sheathe-mp4"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "ISO-BMFF / fMP4 / CMAF box writing and fragmentation for the sheathe packager"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sheathe-core.workspace = true
+sheathe-crypto.workspace = true

@@ -1,0 +1,25 @@
+[package]
+name = "sheathe-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Command-line media packager: HLS/DASH/CMAF (pure-Rust Shaka Packager alternative)"
+keywords.workspace = true
+categories.workspace = true
+
+# The published binary is simply `sheathe`.
+[[bin]]
+name = "sheathe"
+path = "src/main.rs"
+
+[dependencies]
+sheathe-core.workspace = true
+sheathe-mp4.workspace = true
+sheathe-dash.workspace = true
+sheathe-hls.workspace = true
+sheathe-crypto.workspace = true
+anyhow.workspace = true
+clap.workspace = true

@@ -1,0 +1,10 @@
+/target
+**/*.rs.bk
+Cargo.lock.bak
+.DS_Store
+
+# Local sample/oracle corpus (large media; never committed).
+/corpus
+/fixtures/*.mp4
+/fixtures/*.ts
+/fixtures/*.m4s
