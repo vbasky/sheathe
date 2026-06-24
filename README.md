@@ -57,7 +57,7 @@ don't ship.
 
 ## MSRV
 
-Rust **1.82** (declared in `Cargo.toml`'s `workspace.package.rust-version`). CI
+Rust **1.85** (declared in `Cargo.toml`'s `workspace.package.rust-version`). CI
 reads that exact value and builds against it, so the MSRV can't drift.
 
 ## License

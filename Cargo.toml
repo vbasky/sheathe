@@ -15,7 +15,9 @@ members = [
 version = "0.1.0"
 edition = "2021"
 # Real consumer MSRV — CI reads this exact value out of Cargo.toml.
-rust-version = "1.82"
+# 1.85 is the true floor: clap's dependency tree (clap_lex 1.1.0) is edition 2024,
+# whose Cargo feature stabilized in Rust 1.85.
+rust-version = "1.85"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/vbasky/sheathe"
 authors = ["Vikram Bhaskaran <vikram.bhaskaran@outlook.com>"]
