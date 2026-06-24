@@ -4,38 +4,84 @@ on:
   push:
     branches: [main]
   pull_request:
+    branches: [main]
 
-env:
-  CARGO_TERM_COLOR: always
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # MSRV guard: the toolchain is read straight out of Cargo.toml's
-  # `workspace.package.rust-version`, so the declared MSRV and the version we
-  # actually build against can never silently drift apart.
-  msrv:
-    name: build @ declared MSRV
-    runs-on: ubuntu-latest
+  check:
+    name: check + test + lint + doc
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
-      - name: Read MSRV from Cargo.toml
-        id: msrv
-        run: |
-          msrv=$(grep -m1 '^rust-version' Cargo.toml | sed -E 's/.*"([0-9.]+)".*/\1/')
-          echo "Declared MSRV: $msrv"
-          echo "version=$msrv" >> "$GITHUB_OUTPUT"
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ steps.msrv.outputs.version }}
-      - run: cargo check --workspace --all-targets
 
-  test:
-    name: test @ stable
+      - name: install rust
+        run: |
+          rustup update stable --no-self-update
+          rustup default stable
+          rustup component add clippy rustfmt
+
+      - name: cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: fmt
+        run: cargo fmt --all --check
+
+      - name: check
+        run: cargo check --workspace --all-targets
+
+      - name: clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --workspace
+
+      - name: doc
+        env:
+          RUSTDOCFLAGS: "-D warnings"
+        run: cargo doc --no-deps --document-private-items
+
+  msrv:
+    name: msrv (1.85)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+
+      - name: install rust 1.85
+        run: |
+          rustup toolchain install 1.85 --no-self-update
+          rustup default 1.85
+
+      - name: cache
+        uses: actions/cache@v4
         with:
-          components: clippy, rustfmt
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-msrv-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: check
+        run: cargo check --workspace --all-targets
+
+  deny:
+    name: cargo-deny (advisories + licenses + bans)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

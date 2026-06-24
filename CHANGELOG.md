@@ -4,6 +4,26 @@ All notable changes to **sheathe** are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.1.3] — 2026-06-24
+
+### Added
+- DASH `ContentProtection` signalling (`mp4protection` + `cenc:default_KID`) for
+  encrypted output, so players recognise protected content.
+
+### Changed
+- **Conformed the workspace to the `rust-boilerplate` template**: edition 2024,
+  `resolver = "3"`, `[workspace.lints]` (rust / rustdoc / clippy) inherited by
+  every crate, `thiserror` 2.
+- **READMEs** now symlink the root `README.md` in every crate (so each renders on
+  crates.io); the root README gained badges and an absolute banner URL, and the
+  banner moved to `docs/`.
+- Added template tooling: `rustfmt.toml`, `rust-toolchain.toml`, `deny.toml`,
+  `justfile`, `.editorconfig`, `.githooks/pre-commit`, `CONTRIBUTING.md`,
+  `scripts/release.sh`, Dependabot, and a PR template. CI now also runs the doc
+  build and `cargo-deny`.
+
 ## [0.1.2] — 2026-06-24
 
 ### Added
@@ -56,6 +76,7 @@ Shaka Packager as the reference oracle.
 - **Multi-input ABR ladder**: several inputs → one DASH/HLS manifest.
 - CI with an MSRV guard that reads `rust-version` from `Cargo.toml`.
 
+[0.1.3]: https://github.com/vbasky/sheathe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/vbasky/sheathe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vbasky/sheathe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vbasky/sheathe/releases/tag/v0.1.0

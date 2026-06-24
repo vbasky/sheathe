@@ -13,3 +13,6 @@ readme = "README.md"
 
 [dependencies]
 sheathe-core.workspace = true
+
+[lints]
+workspace = true

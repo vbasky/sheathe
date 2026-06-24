@@ -1,7 +1,7 @@
 [package]
 name = "sheathe"
 # The canonical install target: `cargo install sheathe`.
-version = "0.1.2"
+version = "0.1.3"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -18,5 +18,8 @@ name = "sheathe"
 path = "src/main.rs"
 
 [dependencies]
-sheathe-cli = { version = "0.1.2", path = "../sheathe-cli" }
+sheathe-cli = { version = "0.1.3", path = "../sheathe-cli" }
 anyhow.workspace = true
+
+[lints]
+workspace = true

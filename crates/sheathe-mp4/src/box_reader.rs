@@ -26,10 +26,7 @@ impl<'a> Mp4Box<'a> {
 
     /// Iterate the child boxes contained in this box's body.
     pub fn children(&self) -> BoxIter<'a> {
-        BoxIter {
-            data: self.body,
-            pos: 0,
-        }
+        BoxIter { data: self.body, pos: 0 }
     }
 
     /// Find the first immediate child of the given type.

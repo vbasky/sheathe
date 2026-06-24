@@ -17,10 +17,7 @@ pub struct SegmentPolicy {
 
 impl Default for SegmentPolicy {
     fn default() -> Self {
-        Self {
-            target_seconds: 6.0,
-            keyframes_only: true,
-        }
+        Self { target_seconds: 6.0, keyframes_only: true }
     }
 }
 
@@ -83,11 +80,7 @@ impl Fragmenter {
     /// Flush the final partial segment and return all segments.
     pub fn finish(mut self) -> Vec<Segment> {
         if !self.current.is_empty() {
-            let end = self
-                .current
-                .last()
-                .map(next_dts)
-                .unwrap_or(self.current_start);
+            let end = self.current.last().map(next_dts).unwrap_or(self.current_start);
             self.cut(end);
         }
         self.done

@@ -12,9 +12,9 @@ use clap::{Parser, Subcommand};
 use sheathe_core::{MediaKind, Scaled, StreamInfo};
 use sheathe_crypto::{ContentKey, Scheme};
 use sheathe_dash::{Manifest, Protection, Representation};
-use sheathe_hls::{master_playlist, media_playlist, SegmentRef, Variant};
+use sheathe_hls::{SegmentRef, Variant, master_playlist, media_playlist};
 use sheathe_mp4::{
-    write_init_segment, write_media_segment, Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy,
+    Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy, write_init_segment, write_media_segment,
 };
 use std::fs;
 use std::path::Path;
@@ -76,23 +76,17 @@ pub fn run() -> Result<()> {
     }
 
     match cli.command {
-        Command::Package {
-            inputs,
-            out,
-            segment_duration,
-            dash,
-            hls,
-            enc_key,
-            enc_scheme,
-        } => cmd_package(
-            &inputs,
-            &out,
-            segment_duration,
-            dash,
-            hls,
-            enc_key.as_deref(),
-            &enc_scheme,
-        )?,
+        Command::Package { inputs, out, segment_duration, dash, hls, enc_key, enc_scheme } => {
+            cmd_package(
+                &inputs,
+                &out,
+                segment_duration,
+                dash,
+                hls,
+                enc_key.as_deref(),
+                &enc_scheme,
+            )?
+        }
         Command::Probe { input } => cmd_probe(&input)?,
     }
 
@@ -104,22 +98,10 @@ fn cmd_probe(input: &str) -> Result<()> {
     let bytes = fs::read(input).with_context(|| format!("reading {input}"))?;
     let demux = Mp4Demuxer::parse(&bytes).with_context(|| format!("parsing {input}"))?;
 
-    println!(
-        "probe: {input}  ({} bytes, {} track(s))",
-        bytes.len(),
-        demux.tracks().len()
-    );
+    println!("probe: {input}  ({} bytes, {} track(s))", bytes.len(), demux.tracks().len());
     for (i, track) in demux.tracks().iter().enumerate() {
-        println!(
-            "  [{}] track #{}  {}",
-            i,
-            track.track_id,
-            describe(&track.info)
-        );
-        println!(
-            "       samples={}  timescale={}",
-            track.sample_count, track.info.timescale.0
-        );
+        println!("  [{}] track #{}  {}", i, track.track_id, describe(&track.info));
+        println!("       samples={}  timescale={}", track.sample_count, track.info.timescale.0);
     }
     Ok(())
 }
@@ -161,10 +143,7 @@ fn cmd_package(
         println!("  encryption = {alg}");
     }
 
-    let policy = SegmentPolicy {
-        target_seconds: segment_duration,
-        keyframes_only: true,
-    };
+    let policy = SegmentPolicy { target_seconds: segment_duration, keyframes_only: true };
     let mut dash_reps = Vec::new();
     let mut hls_variants = Vec::new();
     let mut total_seconds = 0.0_f64;
@@ -183,11 +162,8 @@ fn cmd_package(
 
             // Init segment.
             let init_name = format!("init_{rep}.mp4");
-            fs::write(
-                out_dir.join(&init_name),
-                write_init_segment(track, encryption.as_ref()),
-            )
-            .with_context(|| format!("writing {init_name}"))?;
+            fs::write(out_dir.join(&init_name), write_init_segment(track, encryption.as_ref()))
+                .with_context(|| format!("writing {init_name}"))?;
 
             // Media segments.
             let mut durations = Vec::with_capacity(segments.len());
@@ -235,15 +211,9 @@ fn cmd_package(
 
             if hls {
                 let media_name = format!("media_{rep}.m3u8");
-                fs::write(
-                    out_dir.join(&media_name),
-                    media_playlist(&init_name, &hls_segs),
-                )
-                .with_context(|| format!("writing {media_name}"))?;
-                hls_variants.push(Variant {
-                    stream: track.info.clone(),
-                    playlist_uri: media_name,
-                });
+                fs::write(out_dir.join(&media_name), media_playlist(&init_name, &hls_segs))
+                    .with_context(|| format!("writing {media_name}"))?;
+                hls_variants.push(Variant { stream: track.info.clone(), playlist_uri: media_name });
             }
 
             rep += 1;
@@ -259,12 +229,9 @@ fn cmd_package(
             .to_string(),
             default_kid: e.key.kid,
         });
-        let mpd = Manifest {
-            duration_seconds: total_seconds,
-            representations: dash_reps,
-            protection,
-        }
-        .to_xml();
+        let mpd =
+            Manifest { duration_seconds: total_seconds, representations: dash_reps, protection }
+                .to_xml();
         fs::write(out_dir.join("manifest.mpd"), mpd).context("writing manifest.mpd")?;
         println!("  wrote manifest.mpd");
     }
@@ -279,9 +246,8 @@ fn cmd_package(
 
 /// Parse a `<KID hex>:<KEY hex>` raw-key spec + scheme name into an [`Encryption`].
 fn parse_enc_key(spec: &str, scheme: &str) -> Result<Encryption> {
-    let (kid_hex, key_hex) = spec
-        .split_once(':')
-        .context("--enc-key must be <KID hex>:<KEY hex>")?;
+    let (kid_hex, key_hex) =
+        spec.split_once(':').context("--enc-key must be <KID hex>:<KEY hex>")?;
     let kid = parse_hex16(kid_hex).context("invalid KID")?;
     let key = parse_hex16(key_hex).context("invalid KEY")?;
     let scheme = match scheme {
@@ -295,11 +261,7 @@ fn parse_enc_key(spec: &str, scheme: &str) -> Result<Encryption> {
         0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
         0xff,
     ];
-    Ok(Encryption {
-        scheme,
-        key: ContentKey { kid, key },
-        constant_iv,
-    })
+    Ok(Encryption { scheme, key: ContentKey { kid, key }, constant_iv })
 }
 
 /// Parse exactly 32 hex chars into a 16-byte array.

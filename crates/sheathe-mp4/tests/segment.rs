@@ -4,10 +4,10 @@
 
 mod common;
 
-use common::{build_mp4, SIZES};
+use common::{SIZES, build_mp4};
 use sheathe_mp4::{
-    fragment, top_level, write_init_segment, write_media_segment, Cursor, Mp4Box, Mp4Demuxer,
-    SegmentPolicy,
+    Cursor, Mp4Box, Mp4Demuxer, SegmentPolicy, fragment, top_level, write_init_segment,
+    write_media_segment,
 };
 
 /// Collect the top-level box types of a buffer.
@@ -33,10 +33,7 @@ fn init_segment_has_ftyp_moov_mvex() {
 
     let moov = find(&init, b"moov");
     let trak = moov.child(b"trak").expect("ok").expect("trak");
-    assert!(
-        moov.child(b"mvex").expect("ok").is_some(),
-        "moov needs mvex"
-    );
+    assert!(moov.child(b"mvex").expect("ok").is_some(), "moov needs mvex");
 
     // The avc1 sample entry is carried through into stsd.
     let stbl = trak
@@ -50,10 +47,7 @@ fn init_segment_has_ftyp_moov_mvex() {
         .unwrap()
         .unwrap();
     let stsd = stbl.child(b"stsd").unwrap().unwrap();
-    assert!(
-        stsd.body.windows(4).any(|w| w == b"avc1"),
-        "stsd should carry the avc1 sample entry"
-    );
+    assert!(stsd.body.windows(4).any(|w| w == b"avc1"), "stsd should carry the avc1 sample entry");
 }
 
 #[test]
@@ -69,10 +63,7 @@ fn media_segment_layout_and_sizes() {
     let seg = &segments[0];
 
     let media = write_media_segment(track, 1, seg, 0, None);
-    assert_eq!(
-        top_types(&media),
-        vec![*b"styp", *b"sidx", *b"moof", *b"mdat"]
-    );
+    assert_eq!(top_types(&media), vec![*b"styp", *b"sidx", *b"moof", *b"mdat"]);
 
     // trun sample_count matches the segment.
     let moof = find(&media, b"moof");

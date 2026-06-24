@@ -90,13 +90,7 @@ pub fn write_media_segment(
 ) -> Vec<u8> {
     let enc_samples = enc.map(|e| encrypt_segment(track, segment, first_sample_index, e));
     let iv_size = enc.map_or(0, Encryption::per_sample_iv_size);
-    let moof = build_moof(
-        track,
-        sequence_number,
-        segment,
-        enc_samples.as_deref(),
-        iv_size,
-    );
+    let moof = build_moof(track, sequence_number, segment, enc_samples.as_deref(), iv_size);
     let mdat = build_mdat(segment, enc_samples.as_deref());
     let referenced_size = (moof.len() + mdat.len()) as u32;
     let sidx = build_sidx(track, segment, referenced_size);
@@ -174,11 +168,7 @@ fn write_trak(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>) {
     w.u32(0); // reserved[2]
     w.u16(0); // layer
     w.u16(0); // alternate_group
-    w.u16(if track.info.kind == MediaKind::Audio {
-        0x0100
-    } else {
-        0
-    }); // volume
+    w.u16(if track.info.kind == MediaKind::Audio { 0x0100 } else { 0 }); // volume
     w.u16(0); // reserved
     for m in UNITY_MATRIX {
         w.u32(m);
@@ -387,10 +377,7 @@ fn build_mdat(segment: &Segment, enc_samples: Option<&[SampleEnc]>) -> Vec<u8> {
 }
 
 fn build_sidx(track: &Track, segment: &Segment, referenced_size: u32) -> Vec<u8> {
-    let earliest_pts = segment
-        .samples
-        .first()
-        .map_or(segment.start_ticks, |s| s.pts);
+    let earliest_pts = segment.samples.first().map_or(segment.start_ticks, |s| s.pts);
     let mut w = BoxWriter::new();
     w.begin(fcc(b"sidx"));
     full(&mut w, 1, 0);
@@ -400,10 +387,10 @@ fn build_sidx(track: &Track, segment: &Segment, referenced_size: u32) -> Vec<u8>
     w.u64(0); // first_offset
     w.u16(0); // reserved
     w.u16(1); // reference_count
-              // reference_type (0 = media) << 31 | referenced_size
+    // reference_type (0 = media) << 31 | referenced_size
     w.u32(referenced_size & 0x7fff_ffff);
     w.u32(segment.duration_ticks as u32); // subsegment_duration
-                                          // starts_with_SAP (1) << 31 | SAP_type (1) << 28 | SAP_delta (0)
+    // starts_with_SAP (1) << 31 | SAP_type (1) << 28 | SAP_delta (0)
     w.u32(0x9000_0000);
     w.end();
     w.into_bytes()
@@ -444,7 +431,7 @@ fn protected_sample_entry(track: &Track, enc: &Encryption) -> Vec<u8> {
     let mut w = BoxWriter::new();
     w.begin(fcc(new_type));
     w.bytes(body); // original sample-entry body incl. avcC/esds
-                   // sinf
+    // sinf
     w.begin(fcc(b"sinf"));
     w.begin(fcc(b"frma"));
     w.bytes(&orig_fourcc);
@@ -531,18 +518,11 @@ fn encrypt_segment(
             let subsamples = if video {
                 video_subsamples(&data, nal_len, header)
             } else {
-                vec![Subsample {
-                    clear: 0,
-                    protected: data.len() as u32,
-                }]
+                vec![Subsample { clear: 0, protected: data.len() as u32 }]
             };
             // Encryption never changes length; ignore the validated result.
             let _ = encryptor.encrypt(enc.scheme, &iv, &mut data, &subsamples);
-            SampleEnc {
-                iv,
-                subsamples,
-                data,
-            }
+            SampleEnc { iv, subsamples, data }
         })
         .collect()
 }
@@ -570,10 +550,7 @@ fn video_subsamples(data: &[u8], nal_len: u8, header: usize) -> Vec<Subsample> {
         p = nal_end;
     }
     if p < data.len() {
-        subs.push(Subsample {
-            clear: (data.len() - p) as u32,
-            protected: 0,
-        });
+        subs.push(Subsample { clear: (data.len() - p) as u32, protected: 0 });
     }
     subs
 }
@@ -608,9 +585,7 @@ fn write_senc(w: &mut BoxWriter, samples: &[SampleEnc], iv_size: u8) {
 
 fn sample_entry_fourcc(track: &Track) -> [u8; 4] {
     let raw = track.sample_entry();
-    raw.get(4..8)
-        .and_then(|s| s.try_into().ok())
-        .unwrap_or(*b"\0\0\0\0")
+    raw.get(4..8).and_then(|s| s.try_into().ok()).unwrap_or(*b"\0\0\0\0")
 }
 
 fn sample_entry_body(track: &Track) -> &[u8] {

@@ -14,9 +14,9 @@
 //! so the caller (the MP4 muxer) decides the NAL-aware clear/protected split;
 //! this crate stays format-agnostic.
 
+use aes::Aes128;
 use aes::cipher::generic_array::GenericArray;
 use aes::cipher::{BlockEncrypt, KeyInit};
-use aes::Aes128;
 use sheathe_core::{Error, Result};
 
 /// A CENC protection scheme (the `schm` `scheme_type`).
@@ -69,9 +69,7 @@ pub struct Encryptor {
 impl Encryptor {
     /// Build an encryptor for a 16-byte AES-128 key.
     pub fn new(key: &[u8; 16]) -> Self {
-        Self {
-            cipher: Aes128::new(GenericArray::from_slice(key)),
-        }
+        Self { cipher: Aes128::new(GenericArray::from_slice(key)) }
     }
 
     /// Encrypt `data` in place under `scheme`, treating it as the given
@@ -84,10 +82,8 @@ impl Encryptor {
         subsamples: &[Subsample],
     ) -> Result<()> {
         // Validate the layout covers exactly `data`.
-        let total: u64 = subsamples
-            .iter()
-            .map(|s| u64::from(s.clear) + u64::from(s.protected))
-            .sum();
+        let total: u64 =
+            subsamples.iter().map(|s| u64::from(s.clear) + u64::from(s.protected)).sum();
         if total != data.len() as u64 {
             return Err(Error::malformed("subsample layout does not cover sample"));
         }
@@ -178,10 +174,7 @@ mod tests {
     ];
 
     fn hex(s: &str) -> Vec<u8> {
-        (0..s.len())
-            .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
-            .collect()
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
     }
 
     #[test]
@@ -190,12 +183,8 @@ mod tests {
         let iv = hex("f0f1f2f3f4f5f6f7f8f9fafbfcfdfeff");
         let mut data = hex("6bc1bee22e409f96e93d7e117393172a");
         let enc = Encryptor::new(&KEY);
-        let subs = [Subsample {
-            clear: 0,
-            protected: 16,
-        }];
-        enc.encrypt(Scheme::Cenc, iv[..].try_into().unwrap(), &mut data, &subs)
-            .unwrap();
+        let subs = [Subsample { clear: 0, protected: 16 }];
+        enc.encrypt(Scheme::Cenc, iv[..].try_into().unwrap(), &mut data, &subs).unwrap();
         assert_eq!(data, hex("874d6191b620e3261bef6864990db6ce"));
     }
 
@@ -205,12 +194,8 @@ mod tests {
         let iv = hex("000102030405060708090a0b0c0d0e0f");
         let mut data = hex("6bc1bee22e409f96e93d7e117393172a");
         let enc = Encryptor::new(&KEY);
-        let subs = [Subsample {
-            clear: 0,
-            protected: 16,
-        }];
-        enc.encrypt(Scheme::Cbcs, iv[..].try_into().unwrap(), &mut data, &subs)
-            .unwrap();
+        let subs = [Subsample { clear: 0, protected: 16 }];
+        enc.encrypt(Scheme::Cbcs, iv[..].try_into().unwrap(), &mut data, &subs).unwrap();
         assert_eq!(data, hex("7649abac8119b246cee98e9b12e9197d"));
     }
 
@@ -220,24 +205,10 @@ mod tests {
         let mut data = vec![0xAAu8; 32];
         let enc = Encryptor::new(&KEY);
         // 8 clear, 24 protected (8+24=32).
-        enc.encrypt(
-            Scheme::Cenc,
-            &iv,
-            &mut data,
-            &[Subsample {
-                clear: 8,
-                protected: 24,
-            }],
-        )
-        .unwrap();
-        assert!(
-            data[..8].iter().all(|&b| b == 0xAA),
-            "clear prefix must be untouched"
-        );
-        assert!(
-            data[8..].iter().any(|&b| b != 0xAA),
-            "protected region must change"
-        );
+        enc.encrypt(Scheme::Cenc, &iv, &mut data, &[Subsample { clear: 8, protected: 24 }])
+            .unwrap();
+        assert!(data[..8].iter().all(|&b| b == 0xAA), "clear prefix must be untouched");
+        assert!(data[8..].iter().any(|&b| b != 0xAA), "protected region must change");
     }
 
     #[test]
@@ -247,16 +218,8 @@ mod tests {
         let mut data = vec![0x11u8; 160];
         let original = data.clone();
         let enc = Encryptor::new(&KEY);
-        enc.encrypt(
-            Scheme::Cbcs,
-            &iv,
-            &mut data,
-            &[Subsample {
-                clear: 0,
-                protected: 160,
-            }],
-        )
-        .unwrap();
+        enc.encrypt(Scheme::Cbcs, &iv, &mut data, &[Subsample { clear: 0, protected: 160 }])
+            .unwrap();
         assert_ne!(data[..16], original[..16], "first block encrypted");
         assert_eq!(data[16..], original[16..], "blocks 1..9 skipped");
     }
@@ -269,10 +232,7 @@ mod tests {
             Scheme::Cenc,
             &[0u8; 16],
             &mut data,
-            &[Subsample {
-                clear: 0,
-                protected: 9,
-            }],
+            &[Subsample { clear: 0, protected: 9 }],
         );
         assert!(err.is_err());
     }
@@ -284,16 +244,7 @@ mod tests {
         // preservation of clear regions.
         let enc = Encryptor::new(&KEY);
         let iv = [3u8; 16];
-        let subs = [
-            Subsample {
-                clear: 5,
-                protected: 20,
-            },
-            Subsample {
-                clear: 10,
-                protected: 65,
-            },
-        ];
+        let subs = [Subsample { clear: 5, protected: 20 }, Subsample { clear: 10, protected: 65 }];
         let original: Vec<u8> = (0..100u8).collect();
         let mut data = original.clone();
 

@@ -17,11 +17,11 @@ mod demux;
 mod fragmenter;
 mod segment;
 
-pub use box_reader::{top_level, BoxIter, Cursor, Mp4Box};
+pub use box_reader::{BoxIter, Cursor, Mp4Box, top_level};
 pub use box_writer::{BoxWriter, FourCc};
 pub use demux::{Mp4Demuxer, Track};
 pub use fragmenter::{Fragmenter, Segment, SegmentPolicy};
-pub use segment::{write_init_segment, write_media_segment, Encryption};
+pub use segment::{Encryption, write_init_segment, write_media_segment};
 
 /// Group `samples` into media segments according to `policy`.
 pub fn fragment(

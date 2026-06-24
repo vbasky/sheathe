@@ -2,7 +2,7 @@
 
 mod common;
 
-use common::{build_mp4, HEIGHT, SAMPLE_DELTA, SIZES, TIMESCALE, WIDTH};
+use common::{HEIGHT, SAMPLE_DELTA, SIZES, TIMESCALE, WIDTH, build_mp4};
 use sheathe_core::{Codec, MediaKind, SampleFlags};
 use sheathe_mp4::Mp4Demuxer;
 
@@ -35,10 +35,7 @@ fn reconstructs_samples_and_timing() {
     // Sizes, contents, and decode timing.
     for (i, s) in samples.iter().enumerate() {
         assert_eq!(s.data.len(), SIZES[i] as usize, "sample {i} size");
-        assert!(
-            s.data.iter().all(|&b| b == 0x10 + i as u8),
-            "sample {i} bytes"
-        );
+        assert!(s.data.iter().all(|&b| b == 0x10 + i as u8), "sample {i} bytes");
         assert_eq!(s.dts, i as u64 * u64::from(SAMPLE_DELTA), "sample {i} dts");
         assert_eq!(s.duration, SAMPLE_DELTA);
     }

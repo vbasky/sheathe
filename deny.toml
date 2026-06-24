@@ -1,0 +1,32 @@
+# cargo-deny configuration — https://embarkstudios.github.io/cargo-deny/
+# Run locally with `just deny`; enforced in CI by the `deny` job.
+
+[advisories]
+version = 2
+yanked = "deny"
+# Only flag unmaintained crates we directly depend on (actionable), not deep
+# transitive crates we don't control.
+unmaintained = "workspace"
+ignore = []
+
+[licenses]
+version = 2
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.8
+
+[bans]
+# Warn (don't fail) when a dependency is pulled in at multiple versions.
+multiple-versions = "warn"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

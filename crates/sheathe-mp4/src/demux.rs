@@ -10,7 +10,7 @@
 //! the writer; the demuxer itself does not expose them as structured fields yet
 //! (see `ROADMAP.md`).
 
-use crate::box_reader::{top_level, Cursor, Mp4Box};
+use crate::box_reader::{Cursor, Mp4Box, top_level};
 use sheathe_core::{Codec, Error, MediaKind, Result, Sample, SampleFlags, StreamInfo, Timescale};
 
 /// A demuxed MP4: the parsed tracks plus a borrow of the source bytes so
@@ -89,10 +89,8 @@ impl<'a> Mp4Demuxer<'a> {
     /// Reconstruct the samples of track `index`, in decode order, copying each
     /// sample's coded bytes out of the source buffer.
     pub fn samples(&self, index: usize) -> Result<Vec<Sample>> {
-        let track = self
-            .tracks
-            .get(index)
-            .ok_or_else(|| Error::malformed("track index out of range"))?;
+        let track =
+            self.tracks.get(index).ok_or_else(|| Error::malformed("track index out of range"))?;
         track.table.build_samples(self.data)
     }
 }
@@ -109,22 +107,14 @@ fn find_top<'a>(data: &'a [u8], kind: &[u8; 4]) -> Result<Option<Mp4Box<'a>>> {
 }
 
 fn parse_trak(trak: &Mp4Box<'_>) -> Result<Option<Track>> {
-    let tkhd = trak
-        .child(b"tkhd")?
-        .ok_or_else(|| Error::malformed("trak without tkhd"))?;
+    let tkhd = trak.child(b"tkhd")?.ok_or_else(|| Error::malformed("trak without tkhd"))?;
     let track_id = parse_tkhd_track_id(tkhd.body)?;
 
-    let mdia = trak
-        .child(b"mdia")?
-        .ok_or_else(|| Error::malformed("trak without mdia"))?;
-    let mdhd = mdia
-        .child(b"mdhd")?
-        .ok_or_else(|| Error::malformed("mdia without mdhd"))?;
+    let mdia = trak.child(b"mdia")?.ok_or_else(|| Error::malformed("trak without mdia"))?;
+    let mdhd = mdia.child(b"mdhd")?.ok_or_else(|| Error::malformed("mdia without mdhd"))?;
     let timescale = parse_mdhd_timescale(mdhd.body)?;
 
-    let hdlr = mdia
-        .child(b"hdlr")?
-        .ok_or_else(|| Error::malformed("mdia without hdlr"))?;
+    let hdlr = mdia.child(b"hdlr")?.ok_or_else(|| Error::malformed("mdia without hdlr"))?;
     let handler = parse_hdlr_handler(hdlr.body)?;
     let kind = match &handler {
         b"vide" => MediaKind::Video,
@@ -134,16 +124,10 @@ fn parse_trak(trak: &Mp4Box<'_>) -> Result<Option<Track>> {
         _ => return Ok(None),
     };
 
-    let minf = mdia
-        .child(b"minf")?
-        .ok_or_else(|| Error::malformed("mdia without minf"))?;
-    let stbl = minf
-        .child(b"stbl")?
-        .ok_or_else(|| Error::malformed("minf without stbl"))?;
+    let minf = mdia.child(b"minf")?.ok_or_else(|| Error::malformed("mdia without minf"))?;
+    let stbl = minf.child(b"stbl")?.ok_or_else(|| Error::malformed("minf without stbl"))?;
 
-    let stsd = stbl
-        .child(b"stsd")?
-        .ok_or_else(|| Error::malformed("stbl without stsd"))?;
+    let stsd = stbl.child(b"stsd")?.ok_or_else(|| Error::malformed("stbl without stsd"))?;
     let entry = parse_stsd(stsd.body, kind)?;
 
     let table = parse_sample_table(&stbl)?;
@@ -160,13 +144,7 @@ fn parse_trak(trak: &Mp4Box<'_>) -> Result<Option<Track>> {
         codec_string: entry.codec_string,
     };
 
-    Ok(Some(Track {
-        info,
-        track_id,
-        sample_count,
-        sample_entry: entry.raw,
-        table,
-    }))
+    Ok(Some(Track { info, track_id, sample_count, sample_entry: entry.raw, table }))
 }
 
 fn parse_tkhd_track_id(body: &[u8]) -> Result<u32> {
@@ -226,9 +204,8 @@ fn parse_stsd(body: &[u8], kind: MediaKind) -> Result<StsdInfo> {
     if body.len() < 8 {
         return Err(Error::malformed("stsd truncated"));
     }
-    let entry = top_level(&body[8..])
-        .next()
-        .ok_or_else(|| Error::malformed("stsd entry missing"))??;
+    let entry =
+        top_level(&body[8..]).next().ok_or_else(|| Error::malformed("stsd entry missing"))??;
     let codec = codec_from_fourcc(&entry.kind);
     let codec_string = crate::codecs::rfc6381(kind, &entry.kind, entry.body);
 
@@ -244,13 +221,7 @@ fn parse_stsd(body: &[u8], kind: MediaKind) -> Result<StsdInfo> {
         MediaKind::Audio => (None, parse_audio_entry(entry.body)?),
         MediaKind::Text => (None, None),
     };
-    Ok(StsdInfo {
-        codec,
-        codec_string,
-        resolution,
-        sample_rate,
-        raw,
-    })
+    Ok(StsdInfo { codec, codec_string, resolution, sample_rate, raw })
 }
 
 fn codec_from_fourcc(f: &[u8; 4]) -> Codec {
@@ -304,18 +275,12 @@ fn parse_sample_table(stbl: &Mp4Box<'_>) -> Result<SampleTable> {
         let n = c.u32()?;
         for _ in 0..n {
             let count = c.u32()?;
-            let off = if version == 1 {
-                i64::from(c.u32()? as i32)
-            } else {
-                i64::from(c.u32()?)
-            };
+            let off = if version == 1 { i64::from(c.u32()? as i32) } else { i64::from(c.u32()?) };
             t.ctts.push((count, off));
         }
     }
 
-    let stsc = stbl
-        .child(b"stsc")?
-        .ok_or_else(|| Error::malformed("stbl without stsc"))?;
+    let stsc = stbl.child(b"stsc")?.ok_or_else(|| Error::malformed("stbl without stsc"))?;
     {
         let mut c = Cursor::new(stsc.body);
         c.version_flags()?;
@@ -412,22 +377,14 @@ fn read_stz2_sizes(c: &mut Cursor<'_>, field_size: u8, count: u32) -> Result<Vec
                 }
             }
         }
-        other => {
-            return Err(Error::malformed(format!(
-                "unsupported stz2 field size {other}"
-            )))
-        }
+        other => return Err(Error::malformed(format!("unsupported stz2 field size {other}"))),
     }
     Ok(sizes)
 }
 
 fn average_bitrate(t: &SampleTable, timescale: u32) -> Option<u32> {
     let total_bytes: u64 = t.sizes.iter().map(|&s| u64::from(s)).sum();
-    let total_ticks: u64 = t
-        .stts
-        .iter()
-        .map(|&(c, d)| u64::from(c) * u64::from(d))
-        .sum();
+    let total_ticks: u64 = t.stts.iter().map(|&(c, d)| u64::from(c) * u64::from(d)).sum();
     if total_ticks == 0 {
         return None;
     }

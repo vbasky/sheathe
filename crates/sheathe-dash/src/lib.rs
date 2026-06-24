@@ -52,11 +52,8 @@ impl Manifest {
         let mut s = String::new();
         s.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         // The `cenc:` namespace is only needed when signalling protection.
-        let cenc_ns = if self.protection.is_some() {
-            " xmlns:cenc=\"urn:mpeg:cenc:2013\""
-        } else {
-            ""
-        };
+        let cenc_ns =
+            if self.protection.is_some() { " xmlns:cenc=\"urn:mpeg:cenc:2013\"" } else { "" };
         // SegmentTemplate + SegmentTimeline is the "live" profile, even for
         // static (VOD) presentations.
         let _ = writeln!(
@@ -72,16 +69,11 @@ impl Manifest {
         );
         s.push_str("  <Period>\n");
 
-        for (kind, content_type) in [
-            (MediaKind::Video, "video"),
-            (MediaKind::Audio, "audio"),
-            (MediaKind::Text, "text"),
-        ] {
-            let reps: Vec<&Representation> = self
-                .representations
-                .iter()
-                .filter(|r| r.stream.kind == kind)
-                .collect();
+        for (kind, content_type) in
+            [(MediaKind::Video, "video"), (MediaKind::Audio, "audio"), (MediaKind::Text, "text")]
+        {
+            let reps: Vec<&Representation> =
+                self.representations.iter().filter(|r| r.stream.kind == kind).collect();
             if reps.is_empty() {
                 continue;
             }
@@ -121,24 +113,13 @@ fn render_content_protection(s: &mut String, p: &Protection) {
 /// Format a 16-byte KID as a dashed UUID (8-4-4-4-12).
 fn kid_uuid(kid: &[u8; 16]) -> String {
     let h: String = kid.iter().map(|b| format!("{b:02x}")).collect();
-    format!(
-        "{}-{}-{}-{}-{}",
-        &h[0..8],
-        &h[8..12],
-        &h[12..16],
-        &h[16..20],
-        &h[20..32]
-    )
+    format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
 fn render_representation(s: &mut String, r: &Representation) {
     let codec = r.stream.rfc6381();
     let bandwidth = r.stream.bitrate.unwrap_or(0);
-    let _ = write!(
-        s,
-        "      <Representation id=\"{}\" codecs=\"{}\"",
-        r.id, codec
-    );
+    let _ = write!(s, "      <Representation id=\"{}\" codecs=\"{}\"", r.id, codec);
     if let Some((w, h)) = r.stream.resolution {
         let _ = write!(s, " width=\"{}\" height=\"{}\"", w, h);
     }

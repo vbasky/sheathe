@@ -70,8 +70,6 @@ impl StreamInfo {
     /// The RFC 6381 `codecs=` value for this stream: the parsed
     /// [`StreamInfo::codec_string`] if present, else the bare codec family.
     pub fn rfc6381(&self) -> String {
-        self.codec_string
-            .clone()
-            .unwrap_or_else(|| self.codec.rfc6381_family().to_string())
+        self.codec_string.clone().unwrap_or_else(|| self.codec.rfc6381_family().to_string())
     }
 }

@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cargo fmt --all --check 2>/dev/null || {
+  cargo fmt --all
+  echo "→ cargo fmt: applied formatting changes (staging them)"
+  git add -u
+}

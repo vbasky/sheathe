@@ -14,3 +14,6 @@ readme = "README.md"
 [dependencies]
 sheathe-core.workspace = true
 aes.workspace = true
+
+[lints]
+workspace = true

@@ -1,8 +1,13 @@
 <p align="center">
-  <img src="assets/banner.png" alt="sheathe — pure-Rust HLS / DASH / CMAF packager" width="100%">
+  <img src="https://raw.githubusercontent.com/vbasky/sheathe/main/docs/banner.png" alt="sheathe — pure-Rust HLS / DASH / CMAF packager" width="100%">
 </p>
 
 # sheathe
+
+[![CI](https://github.com/vbasky/sheathe/actions/workflows/ci.yml/badge.svg)](https://github.com/vbasky/sheathe/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/sheathe.svg?logo=rust&label=crates.io)](https://crates.io/crates/sheathe)
+[![docs.rs](https://img.shields.io/docsrs/sheathe?logo=docs.rs&label=docs.rs)](https://docs.rs/sheathe)
+[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 
 **Pure-Rust HLS / DASH / CMAF media packager.** A memory-safe, dependency-light
 alternative to [Shaka Packager](https://github.com/shaka-project/shaka-packager),

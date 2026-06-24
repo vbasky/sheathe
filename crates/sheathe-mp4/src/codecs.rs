@@ -35,10 +35,7 @@ pub(crate) fn rfc6381(kind: MediaKind, fourcc: &[u8; 4], entry_body: &[u8]) -> O
 
 /// Find a child box body by type within a back-to-back box sequence.
 fn find_child<'a>(data: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
-    top_level(data)
-        .flatten()
-        .find(|b| &b.kind == kind)
-        .map(|b| b.body)
+    top_level(data).flatten().find(|b| &b.kind == kind).map(|b| b.body)
 }
 
 /// NAL-unit length prefix size (bytes) for an AVC/HEVC sample entry, from
@@ -87,16 +84,11 @@ fn hevc_string(fourcc: &[u8; 4], hvcc: &[u8]) -> Option<String> {
     };
     let tier_char = if tier == 0 { 'L' } else { 'H' };
     // Compatibility flags are bit-reversed then printed in hex (no leading zeros).
-    let mut s = format!(
-        "{prefix}.{space}{profile_idc}.{:X}.{tier_char}{level}",
-        compat.reverse_bits()
-    );
+    let mut s =
+        format!("{prefix}.{space}{profile_idc}.{:X}.{tier_char}{level}", compat.reverse_bits());
 
     // Constraint bytes: drop trailing zero bytes, hex, dot-separated.
-    let last = constraint
-        .iter()
-        .rposition(|&b| b != 0)
-        .map_or(0, |i| i + 1);
+    let last = constraint.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
     for byte in &constraint[..last] {
         s.push_str(&format!(".{byte:02X}"));
     }
@@ -223,10 +215,7 @@ mod tests {
     fn hevc_main_l93() {
         // hvcC: version, profile_idc=1, compat=0x60000000, constraint=0x90.., level=93
         let hvcc = [1u8, 0x01, 0x60, 0x00, 0x00, 0x00, 0x90, 0, 0, 0, 0, 0, 0x5d];
-        assert_eq!(
-            hevc_string(b"hvc1", &hvcc).as_deref(),
-            Some("hvc1.1.6.L93.90")
-        );
+        assert_eq!(hevc_string(b"hvc1", &hvcc).as_deref(), Some("hvc1.1.6.L93.90"));
     }
 
     #[test]

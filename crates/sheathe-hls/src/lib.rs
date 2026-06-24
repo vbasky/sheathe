@@ -37,14 +37,10 @@ const AUDIO_GROUP: &str = "aud";
 /// codec folded into `CODECS` and bandwidth). With no video, audio variants fall
 /// back to plain `#EXT-X-STREAM-INF` so the playlist is still usable.
 pub fn master_playlist(variants: &[Variant]) -> String {
-    let audio: Vec<&Variant> = variants
-        .iter()
-        .filter(|v| v.stream.kind == MediaKind::Audio)
-        .collect();
-    let video: Vec<&Variant> = variants
-        .iter()
-        .filter(|v| v.stream.kind == MediaKind::Video)
-        .collect();
+    let audio: Vec<&Variant> =
+        variants.iter().filter(|v| v.stream.kind == MediaKind::Audio).collect();
+    let video: Vec<&Variant> =
+        variants.iter().filter(|v| v.stream.kind == MediaKind::Video).collect();
 
     let mut s = String::from("#EXTM3U\n#EXT-X-VERSION:7\n");
 
@@ -68,15 +64,7 @@ pub fn master_playlist(variants: &[Variant]) -> String {
         }
     } else {
         for v in &video {
-            stream_inf(
-                &mut s,
-                v,
-                if has_audio {
-                    audio_extra.copied()
-                } else {
-                    None
-                },
-            );
+            stream_inf(&mut s, v, if has_audio { audio_extra.copied() } else { None });
         }
     }
     s
@@ -91,10 +79,7 @@ fn stream_inf(s: &mut String, v: &Variant, audio: Option<&Variant>) {
         bandwidth += a.stream.bitrate.unwrap_or(0);
     }
 
-    let _ = write!(
-        s,
-        "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\""
-    );
+    let _ = write!(s, "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\"");
     if let Some((w, h)) = v.stream.resolution {
         let _ = write!(s, ",RESOLUTION={w}x{h}");
     }
@@ -106,11 +91,7 @@ fn stream_inf(s: &mut String, v: &Variant, audio: Option<&Variant>) {
 
 /// Build a VOD media playlist from an init segment and ordered segment refs.
 pub fn media_playlist(init_uri: &str, segments: &[SegmentRef]) -> String {
-    let target = segments
-        .iter()
-        .map(|s| s.duration)
-        .fold(0.0_f64, f64::max)
-        .ceil() as u64;
+    let target = segments.iter().map(|s| s.duration).fold(0.0_f64, f64::max).ceil() as u64;
     let mut s = String::from("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:VOD\n");
     let _ = writeln!(s, "#EXT-X-TARGETDURATION:{}", target);
     let _ = writeln!(s, "#EXT-X-MAP:URI=\"{}\"", init_uri);

@@ -2,6 +2,10 @@
 //!
 //! Synthesizing the bytes (rather than committing a binary) keeps CI hermetic
 //! and exercises `BoxWriter` on the way in.
+//!
+//! `pub` items here are shared across test binaries via `mod common;`; each
+//! binary uses a subset, so allow the workspace `unreachable_pub` lint.
+#![allow(unreachable_pub)]
 
 use sheathe_mp4::{BoxWriter, FourCc};
 
