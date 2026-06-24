@@ -78,3 +78,46 @@ fn media_segment_layout_and_sizes() {
     let mdat = find(&media, b"mdat");
     assert_eq!(mdat.body.len() as u32, SIZES.iter().sum::<u32>());
 }
+
+/// First byte index of `needle` in `data`.
+fn index_of(data: &[u8], needle: &[u8]) -> usize {
+    data.windows(needle.len()).position(|w| w == needle).expect("needle present")
+}
+
+#[test]
+fn encrypted_segment_has_cenc_boxes_and_aux_offset() {
+    use sheathe_crypto::{ContentKey, Scheme};
+    use sheathe_mp4::Encryption;
+
+    let mp4 = build_mp4();
+    let demux = Mp4Demuxer::parse(&mp4).expect("parse");
+    let track = &demux.tracks()[0];
+    let samples = demux.samples(0).expect("samples");
+    let segments = fragment(&track.info, samples, SegmentPolicy::default()).expect("fragment");
+
+    let enc = Encryption {
+        scheme: Scheme::Cenc,
+        key: ContentKey { kid: [0x11; 16], key: [0x22; 16] },
+        constant_iv: [0; 16],
+    };
+
+    // Init switches the sample entry to encv and carries tenc + pssh.
+    let init = write_init_segment(track, Some(&enc));
+    for tag in [b"encv", b"tenc", b"pssh"] {
+        assert!(init.windows(4).any(|w| w == tag), "init missing {}", String::from_utf8_lossy(tag));
+    }
+
+    // Media segment carries saiz + saio + senc in the traf.
+    let media = write_media_segment(track, 1, &segments[0], 0, Some(&enc));
+    let traf = find(&media, b"moof").child(b"traf").unwrap().unwrap();
+    let saio = traf.child(b"saio").unwrap().expect("saio");
+    assert!(traf.child(b"saiz").unwrap().is_some(), "saiz present");
+    assert!(traf.child(b"senc").unwrap().is_some(), "senc present");
+
+    // saio offset is moof-relative and points at the senc per-sample aux data
+    // (12 bytes past the `senc` type: version/flags + sample_count).
+    let off = u32::from_be_bytes(saio.body[8..12].try_into().unwrap()) as usize;
+    let moof_start = index_of(&media, b"moof") - 4; // box size precedes the type
+    let senc_aux = index_of(&media, b"senc") + 12;
+    assert_eq!(moof_start + off, senc_aux, "saio must point at senc aux data");
+}

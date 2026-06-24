@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use sheathe_core::{MediaKind, Scaled, StreamInfo};
 use sheathe_crypto::{ContentKey, Scheme};
 use sheathe_dash::{Manifest, Protection, Representation};
-use sheathe_hls::{SegmentRef, Variant, master_playlist, media_playlist};
+use sheathe_hls::{KeyInfo, SegmentRef, Variant, master_playlist, media_playlist};
 use sheathe_mp4::{
     Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy, write_init_segment, write_media_segment,
 };
@@ -59,6 +59,9 @@ enum Command {
         /// `cbcs` (AES-CBC pattern).
         #[arg(long, default_value = "cenc")]
         enc_scheme: String,
+        /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
+        #[arg(long, default_value = "key.bin")]
+        enc_key_uri: String,
     },
     /// Probe an input and print the streams sheathe detects.
     Probe {
@@ -76,17 +79,23 @@ pub fn run() -> Result<()> {
     }
 
     match cli.command {
-        Command::Package { inputs, out, segment_duration, dash, hls, enc_key, enc_scheme } => {
-            cmd_package(
-                &inputs,
-                &out,
-                segment_duration,
-                dash,
-                hls,
-                enc_key.as_deref(),
-                &enc_scheme,
-            )?
-        }
+        Command::Package {
+            inputs,
+            out,
+            segment_duration,
+            dash,
+            hls,
+            enc_key,
+            enc_scheme,
+            enc_key_uri,
+        } => cmd_package(
+            &inputs,
+            &out,
+            segment_duration,
+            dash,
+            hls,
+            EncryptionOpts { key: enc_key.as_deref(), scheme: &enc_scheme, key_uri: &enc_key_uri },
+        )?,
         Command::Probe { input } => cmd_probe(&input)?,
     }
 
@@ -109,18 +118,38 @@ fn cmd_probe(input: &str) -> Result<()> {
 /// Demux, fragment, and write CMAF init + media segments plus DASH/HLS manifests
 /// for one or more inputs. Each input's track(s) become separate renditions
 /// sharing one manifest (an ABR ladder when several video inputs are given).
+/// Encryption-related CLI options, grouped so `cmd_package` stays tidy.
+struct EncryptionOpts<'a> {
+    /// `<KID hex>:<KEY hex>` raw key, or `None` for clear output.
+    key: Option<&'a str>,
+    /// `cenc` or `cbcs`.
+    scheme: &'a str,
+    /// HLS `#EXT-X-KEY` delivery URI.
+    key_uri: &'a str,
+}
+
 fn cmd_package(
     inputs: &[String],
     out: &str,
     segment_duration: f64,
     dash: bool,
     hls: bool,
-    enc_key: Option<&str>,
-    enc_scheme: &str,
+    enc: EncryptionOpts<'_>,
 ) -> Result<()> {
     let out_dir = Path::new(out);
     fs::create_dir_all(out_dir).with_context(|| format!("creating {out}/"))?;
-    let encryption = enc_key.map(|k| parse_enc_key(k, enc_scheme)).transpose()?;
+    let encryption = enc.key.map(|k| parse_enc_key(k, enc.scheme)).transpose()?;
+
+    // HLS `#EXT-X-KEY` signalling for encrypted output.
+    let hls_key = encryption.as_ref().map(|_| KeyInfo {
+        method: match enc.scheme {
+            "cbcs" => "SAMPLE-AES",
+            _ => "SAMPLE-AES-CTR",
+        }
+        .to_string(),
+        key_format: "urn:mpeg:dash:mp4protection:2011".to_string(),
+        uri: enc.key_uri.to_string(),
+    });
 
     // Read then parse all inputs (each demuxer borrows its byte buffer).
     let datas: Vec<Vec<u8>> = inputs
@@ -136,7 +165,7 @@ fn cmd_package(
     println!("package: {} input(s) -> {out}/", inputs.len());
     println!("  segment_duration = {segment_duration}s  (dash={dash}, hls={hls})");
     if encryption.is_some() {
-        let alg = match enc_scheme {
+        let alg = match enc.scheme {
             "cbcs" => "cbcs (AES-128-CBC pattern)",
             _ => "cenc (AES-128-CTR)",
         };
@@ -211,8 +240,11 @@ fn cmd_package(
 
             if hls {
                 let media_name = format!("media_{rep}.m3u8");
-                fs::write(out_dir.join(&media_name), media_playlist(&init_name, &hls_segs))
-                    .with_context(|| format!("writing {media_name}"))?;
+                fs::write(
+                    out_dir.join(&media_name),
+                    media_playlist(&init_name, &hls_segs, hls_key.as_ref()),
+                )
+                .with_context(|| format!("writing {media_name}"))?;
                 hls_variants.push(Variant { stream: track.info.clone(), playlist_uri: media_name });
             }
 

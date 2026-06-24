@@ -51,9 +51,10 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
 - ✅ **CENC `cbcs` (AES-128-CBC, pattern 1:9)**: AES-CBC pattern core (NIST-tested);
   constant-IV `tenc` v1, pattern `senc`, `cbcs` `schm`. **ffmpeg decrypt+decode
   verified (video 360 frames + audio).**
-- 🟡 **Manifest encryption signalling**: DASH `ContentProtection`
-  (`mp4protection` + `cenc:default_KID`) and `saiz`/`saio` aux-info boxes.
-- ⬜ HLS `EXT-X-KEY` (SAMPLE-AES / SAMPLE-AES-CTR) + key-delivery URI.
+- ✅ **Manifest encryption signalling**: DASH `ContentProtection`
+  (`mp4protection` + `cenc:default_KID`); `saiz`/`saio` aux-info boxes (offset
+  backpatched to the `senc` data, verified); HLS `#EXT-X-KEY`
+  (`SAMPLE-AES` / `SAMPLE-AES-CTR`) with key-delivery URI.
 - ⬜ `cbc1` / `cens` schemes.
 - ⬜ Key sources beyond raw key: Widevine key server, PlayReady, key files.
 - ⬜ Multi-DRM `pssh` (Widevine + PlayReady + common) and key rotation.

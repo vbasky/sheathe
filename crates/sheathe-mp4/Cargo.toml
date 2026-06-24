@@ -15,5 +15,8 @@ readme = "README.md"
 sheathe-core.workspace = true
 sheathe-crypto.workspace = true
 
+[dev-dependencies]
+sheathe-crypto.workspace = true
+
 [lints]
 workspace = true

@@ -324,6 +324,30 @@ fn build_moof(
     w.u64(segment.start_ticks);
     w.end();
 
+    // saiz/saio: CENC sample auxiliary information (sizes + offset to the IVs/
+    // subsamples, which live in the senc box). The offset is backpatched once the
+    // senc position within the moof is known.
+    let mut saio_offset_pos = None;
+    if let Some(samples) = enc_samples {
+        w.begin(fcc(b"saiz"));
+        full(&mut w, 0, 0);
+        w.u8(0); // default_sample_info_size = 0 → per-sample sizes follow
+        w.u32(samples.len() as u32);
+        for s in samples {
+            // IV (per_sample_iv_size) + subsample_count(2) + N × (clear u16 + protected u32).
+            let size = usize::from(per_sample_iv_size) + 2 + 6 * s.subsamples.len();
+            w.u8(size as u8);
+        }
+        w.end();
+
+        w.begin(fcc(b"saio"));
+        full(&mut w, 0, 0);
+        w.u32(1); // entry_count
+        saio_offset_pos = Some(w.pos());
+        w.u32(0); // offset placeholder (moof-relative; backpatched below)
+        w.end();
+    }
+
     // trun: data-offset + per-sample duration/size/flags (+ composition offset).
     let mut tr_flags = 0x0001 | 0x0100 | 0x0200 | 0x0400;
     if any_cts {
@@ -357,7 +381,23 @@ fn build_moof(
     // data_offset is moof-relative: start of mdat payload = moof length + mdat header (8).
     let data_offset = (bytes.len() + 8) as u32;
     bytes[data_offset_pos..data_offset_pos + 4].copy_from_slice(&data_offset.to_be_bytes());
+
+    // Backpatch saio: moof-relative offset to the first sample's aux info, which
+    // is the senc per-sample payload — 12 bytes past the `senc` type (version/
+    // flags(4) + sample_count(4)). moof has no media payload, so `senc` appears
+    // only as the box type.
+    if let Some(pos) = saio_offset_pos {
+        if let Some(i) = find_subslice(&bytes, b"senc") {
+            let aux_offset = (i + 12) as u32;
+            bytes[pos..pos + 4].copy_from_slice(&aux_offset.to_be_bytes());
+        }
+    }
     bytes
+}
+
+/// First index of `needle` in `haystack`, if present.
+fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|w| w == needle)
 }
 
 fn build_mdat(segment: &Segment, enc_samples: Option<&[SampleEnc]>) -> Vec<u8> {

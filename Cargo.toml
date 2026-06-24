@@ -12,7 +12,7 @@ members = [
 
 # Shared package metadata, inherited by every crate via `field.workspace = true`.
 [workspace.package]
-version = "0.1.3"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -36,11 +36,11 @@ broken_intra_doc_links = "warn"
 
 [workspace.dependencies]
 # Internal crates (path deps, version-pinned for crates.io publication).
-sheathe-core = { version = "0.1.3", path = "crates/sheathe-core" }
-sheathe-mp4 = { version = "0.1.3", path = "crates/sheathe-mp4" }
-sheathe-dash = { version = "0.1.3", path = "crates/sheathe-dash" }
-sheathe-hls = { version = "0.1.3", path = "crates/sheathe-hls" }
-sheathe-crypto = { version = "0.1.3", path = "crates/sheathe-crypto" }
+sheathe-core = { version = "0.1.4", path = "crates/sheathe-core" }
+sheathe-mp4 = { version = "0.1.4", path = "crates/sheathe-mp4" }
+sheathe-dash = { version = "0.1.4", path = "crates/sheathe-dash" }
+sheathe-hls = { version = "0.1.4", path = "crates/sheathe-hls" }
+sheathe-crypto = { version = "0.1.4", path = "crates/sheathe-crypto" }
 
 # External.
 thiserror = "2"

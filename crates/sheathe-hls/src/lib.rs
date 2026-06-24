@@ -89,11 +89,31 @@ fn stream_inf(s: &mut String, v: &Variant, audio: Option<&Variant>) {
     let _ = writeln!(s, "\n{}", v.playlist_uri);
 }
 
+/// CENC key signalling for an HLS media playlist (`#EXT-X-KEY`).
+#[derive(Debug, Clone)]
+pub struct KeyInfo {
+    /// `SAMPLE-AES` (cbcs) or `SAMPLE-AES-CTR` (cenc).
+    pub method: String,
+    /// `KEYFORMAT` value, e.g. `urn:mpeg:dash:mp4protection:2011`.
+    pub key_format: String,
+    /// Key-delivery URI.
+    pub uri: String,
+}
+
 /// Build a VOD media playlist from an init segment and ordered segment refs.
-pub fn media_playlist(init_uri: &str, segments: &[SegmentRef]) -> String {
+///
+/// When `key` is set, an `#EXT-X-KEY` line signals CENC encryption to players.
+pub fn media_playlist(init_uri: &str, segments: &[SegmentRef], key: Option<&KeyInfo>) -> String {
     let target = segments.iter().map(|s| s.duration).fold(0.0_f64, f64::max).ceil() as u64;
     let mut s = String::from("#EXTM3U\n#EXT-X-VERSION:7\n#EXT-X-PLAYLIST-TYPE:VOD\n");
     let _ = writeln!(s, "#EXT-X-TARGETDURATION:{}", target);
+    if let Some(k) = key {
+        let _ = writeln!(
+            s,
+            "#EXT-X-KEY:METHOD={},URI=\"{}\",KEYFORMAT=\"{}\",KEYFORMATVERSIONS=\"1\"",
+            k.method, k.uri, k.key_format
+        );
+    }
     let _ = writeln!(s, "#EXT-X-MAP:URI=\"{}\"", init_uri);
     for seg in segments {
         let _ = writeln!(s, "#EXTINF:{:.3},\n{}", seg.duration, seg.uri);
