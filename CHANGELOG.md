@@ -6,6 +6,8 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-06-25
+
 ### Added
 - **CENC `cbc1` and `cens` schemes** (`--enc-scheme cbc1|cens`), completing the
   ISO/IEC 23001-7 scheme matrix alongside `cenc`/`cbcs`. `cbc1` is full-region

@@ -38,12 +38,12 @@ broken_intra_doc_links = "warn"
 [workspace.dependencies]
 # Internal crates (path + version pin; path-first so scripts/release.sh can
 # rewrite the version with a single regex).
-sheathe-core = { path = "crates/sheathe-core", version = "0.1.4" }
-sheathe-crypto = { path = "crates/sheathe-crypto", version = "0.1.4" }
-sheathe-mp4 = { path = "crates/sheathe-mp4", version = "0.1.4" }
-sheathe-dash = { path = "crates/sheathe-dash", version = "0.1.4" }
-sheathe-hls = { path = "crates/sheathe-hls", version = "0.1.4" }
-sheathe-cli = { path = "crates/sheathe-cli", version = "0.1.4" }
+sheathe-core = { path = "crates/sheathe-core", version = "0.2.0" }
+sheathe-crypto = { path = "crates/sheathe-crypto", version = "0.2.0" }
+sheathe-mp4 = { path = "crates/sheathe-mp4", version = "0.2.0" }
+sheathe-dash = { path = "crates/sheathe-dash", version = "0.2.0" }
+sheathe-hls = { path = "crates/sheathe-hls", version = "0.2.0" }
+sheathe-cli = { path = "crates/sheathe-cli", version = "0.2.0" }
 
 # External.
 thiserror = "2"
