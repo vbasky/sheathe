@@ -11,8 +11,9 @@ members = [
 ]
 
 # Shared package metadata, inherited by every crate via `field.workspace = true`.
+# No shared `version`: each crate declares its own (template convention) so
+# scripts/release.sh bumps them with a simple per-file rewrite.
 [workspace.package]
-version = "0.1.4"
 edition = "2024"
 rust-version = "1.85"
 license = "MIT OR Apache-2.0"
@@ -35,12 +36,14 @@ broken_intra_doc_links = "warn"
 # here with an inline justification when needed.
 
 [workspace.dependencies]
-# Internal crates (path deps, version-pinned for crates.io publication).
-sheathe-core = { version = "0.1.4", path = "crates/sheathe-core" }
-sheathe-mp4 = { version = "0.1.4", path = "crates/sheathe-mp4" }
-sheathe-dash = { version = "0.1.4", path = "crates/sheathe-dash" }
-sheathe-hls = { version = "0.1.4", path = "crates/sheathe-hls" }
-sheathe-crypto = { version = "0.1.4", path = "crates/sheathe-crypto" }
+# Internal crates (path + version pin; path-first so scripts/release.sh can
+# rewrite the version with a single regex).
+sheathe-core = { path = "crates/sheathe-core", version = "0.1.4" }
+sheathe-crypto = { path = "crates/sheathe-crypto", version = "0.1.4" }
+sheathe-mp4 = { path = "crates/sheathe-mp4", version = "0.1.4" }
+sheathe-dash = { path = "crates/sheathe-dash", version = "0.1.4" }
+sheathe-hls = { path = "crates/sheathe-hls", version = "0.1.4" }
+sheathe-cli = { path = "crates/sheathe-cli", version = "0.1.4" }
 
 # External.
 thiserror = "2"

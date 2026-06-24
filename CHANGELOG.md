@@ -6,6 +6,12 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+### Changed
+- Versioning conformed to the template: explicit per-crate `version` (no shared
+  `workspace.package.version`) and path-first internal dependency pins, so
+  `scripts/release.sh` / `just release <version>` bumps every crate + pin in one
+  pass. No published-crate changes.
+
 ## [0.1.4] — 2026-06-24
 
 ### Added

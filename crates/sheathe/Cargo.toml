@@ -18,7 +18,7 @@ name = "sheathe"
 path = "src/main.rs"
 
 [dependencies]
-sheathe-cli = { version = "0.1.4", path = "../sheathe-cli" }
+sheathe-cli = { workspace = true }
 anyhow.workspace = true
 
 [lints]
