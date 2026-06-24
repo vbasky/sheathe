@@ -1,19 +1,15 @@
 [package]
 name = "sheathe-cli"
-version.workspace = true
+# Ahead of the libraries (0.1.0): this version adds the reusable `run()` lib API.
+version = "0.1.1"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Command-line media packager: HLS/DASH/CMAF (pure-Rust Shaka Packager alternative)"
+description = "CLI logic for the sheathe media packager (library; the binary is the `sheathe` crate)"
 keywords.workspace = true
 categories.workspace = true
-
-# The published binary is simply `sheathe`.
-[[bin]]
-name = "sheathe"
-path = "src/main.rs"
 
 [dependencies]
 sheathe-core.workspace = true

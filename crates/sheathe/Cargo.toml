@@ -1,0 +1,21 @@
+[package]
+name = "sheathe"
+# The canonical install target: `cargo install sheathe`. Versioned with the CLI.
+version = "0.1.1"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "Pure-Rust HLS/DASH/CMAF media packager (Shaka Packager alternative) — `sheathe` CLI"
+keywords.workspace = true
+categories.workspace = true
+
+# Installs the `sheathe` binary.
+[[bin]]
+name = "sheathe"
+path = "src/main.rs"
+
+[dependencies]
+sheathe-cli = { version = "0.1.1", path = "../sheathe-cli" }
+anyhow.workspace = true

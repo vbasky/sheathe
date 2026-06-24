@@ -28,13 +28,14 @@ segment → DASH/HLS manifests, with no C/C++ dependencies.
 | [`sheathe-dash`](crates/sheathe-dash)     | MPEG-DASH `.mpd` generation | `mpd` |
 | [`sheathe-hls`](crates/sheathe-hls)       | HLS master + media playlist generation | `hls` |
 | [`sheathe-crypto`](crates/sheathe-crypto) | Common Encryption (cenc / cbcs) | `media/crypto` |
-| [`sheathe-cli`](crates/sheathe-cli)       | The `sheathe` binary | `app` (`packager`) |
+| [`sheathe`](crates/sheathe) / [`sheathe-cli`](crates/sheathe-cli) | The `sheathe` binary / its CLI library | `app` (`packager`) |
 
 ## Install / build
 
 ```sh
-cargo build --workspace
-cargo run -p sheathe-cli -- --help
+cargo install sheathe        # installs the `sheathe` binary
+# or, from a checkout:
+cargo run -p sheathe -- --help
 ```
 
 ## Usage (target CLI)

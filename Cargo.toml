@@ -7,6 +7,7 @@ members = [
     "crates/sheathe-hls",
     "crates/sheathe-crypto",
     "crates/sheathe-cli",
+    "crates/sheathe",
 ]
 
 # Shared package metadata, inherited by every crate via `field.workspace = true`.

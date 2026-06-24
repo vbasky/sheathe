@@ -1,8 +1,9 @@
-//! `sheathe` — command-line media packager.
+//! `sheathe` command-line media packager (library entry point).
 //!
-//! A pure-Rust alternative to Shaka Packager's `packager` binary. `probe`
-//! demuxes an MP4 and lists its streams; `package` demuxes, fragments, and
-//! writes CMAF init + media segments plus DASH and HLS manifests.
+//! A pure-Rust alternative to Shaka Packager's `packager` binary. [`run`] parses
+//! args and dispatches: `probe` lists an MP4's streams; `package` demuxes,
+//! fragments, and writes CMAF init + media segments plus DASH and HLS manifests.
+//! Both the `sheathe-cli` and `sheathe` binaries are thin wrappers over [`run`].
 
 mod banner;
 
@@ -66,7 +67,8 @@ enum Command {
     },
 }
 
-fn main() -> Result<()> {
+/// Parse CLI args and run the requested command.
+pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     if !cli.no_banner {
