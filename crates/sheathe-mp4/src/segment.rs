@@ -112,8 +112,7 @@ pub fn write_media_segment(
 ) -> Vec<u8> {
     // Crypto period for this segment (None unless key rotation is enabled).
     let period = enc.and_then(|e| e.period_for(segment.start_ticks, track.info.timescale.0));
-    let enc_samples =
-        enc.map(|e| encrypt_segment(track, segment, first_sample_index, e, period));
+    let enc_samples = enc.map(|e| encrypt_segment(track, segment, first_sample_index, e, period));
     let iv_size = enc.map_or(0, Encryption::per_sample_iv_size);
     let moof =
         build_moof(track, sequence_number, segment, enc_samples.as_deref(), iv_size, enc, period);
@@ -591,9 +590,11 @@ fn write_seig_groups(
     let pattern = track_pattern(enc, kind);
     let constant_iv = enc.scheme.uses_constant_iv();
     let iv_size = if constant_iv { 0 } else { 16 };
-    let pattern_byte =
-        if enc.scheme.is_pattern() { (pattern.crypt_blocks << 4) | (pattern.skip_blocks & 0x0f) }
-        else { 0 };
+    let pattern_byte = if enc.scheme.is_pattern() {
+        (pattern.crypt_blocks << 4) | (pattern.skip_blocks & 0x0f)
+    } else {
+        0
+    };
     // Entry length: reserved + pattern + isProtected + iv_size + KID, plus the
     // constant IV (size byte + 16) when the scheme uses one.
     let entry_len: u32 = if constant_iv { 1 + 1 + 1 + 1 + 16 + 1 + 16 } else { 1 + 1 + 1 + 1 + 16 };

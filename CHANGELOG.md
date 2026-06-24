@@ -9,6 +9,7 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [0.2.0] — 2026-06-25
 
 ### Added
+
 - **CENC `cbc1` and `cens` schemes** (`--enc-scheme cbc1|cens`), completing the
   ISO/IEC 23001-7 scheme matrix alongside `cenc`/`cbcs`. `cbc1` is full-region
   AES-128-CBC with a per-sample IV; `cens` is AES-128-CTR with 1:9 pattern
@@ -29,6 +30,7 @@ All notable changes to **sheathe** are documented here. The format is based on
   file (with `#` comments), keeping the key out of the process arguments.
 
 ### Changed
+
 - **Pattern encryption is now video-only**, matching Shaka / DASH-IF: under
   `cens`/`cbcs`, audio is encrypted whole-sample (`tenc` pattern `0:0`) instead
   of carrying the 1:9 pattern. Audio tracks now emit `senc` without the
@@ -42,6 +44,7 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [0.1.4] — 2026-06-24
 
 ### Added
+
 - **`saiz`/`saio`** CENC sample-auxiliary-information boxes in media segments
   (DASH-IF conformance); `saio` offset is backpatched to point at the `senc`
   per-sample data (verified). ffmpeg decryption still passes.
@@ -52,10 +55,12 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [0.1.3] — 2026-06-24
 
 ### Added
+
 - DASH `ContentProtection` signalling (`mp4protection` + `cenc:default_KID`) for
   encrypted output, so players recognise protected content.
 
 ### Changed
+
 - **Conformed the workspace to the `rust-boilerplate` template**: edition 2024,
   `resolver = "3"`, `[workspace.lints]` (rust / rustdoc / clippy) inherited by
   every crate, `thiserror` 2.
@@ -70,6 +75,7 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [0.1.2] — 2026-06-24
 
 ### Added
+
 - **CENC `cbcs`** (AES-128-CBC, pattern 1:9) end-to-end — constant-IV `tenc` v1,
   pattern `senc`, `cbcs` `schm`; `--enc-scheme cbcs`. ffmpeg decrypt+decode verified.
 - **DASH `ContentProtection`** signalling for encrypted output
@@ -77,12 +83,14 @@ All notable changes to **sheathe** are documented here. The format is based on
 - **Per-crate READMEs** so every crate renders documentation on crates.io.
 
 ### Changed
+
 - MSRV recorded as **1.85** in the published crate metadata (the dependency tree
   requires it); all crates republished at 0.1.2.
 
 ## [0.1.1] — 2026-06-24
 
 ### Added
+
 - **`sheathe` crate** — the canonical install target: `cargo install sheathe`
   provides the `sheathe` binary.
 - **Release workflow** (`.github/workflows/release.yml`): on a `v*` tag, builds
@@ -90,6 +98,7 @@ All notable changes to **sheathe** are documented here. The format is based on
   and `x86_64-apple-darwin`, and attaches the archives to a GitHub Release.
 
 ### Changed
+
 - **`sheathe-cli` is now library-only**, exposing `pub fn run()`; the binary it
   used to provide moved to the new `sheathe` crate (resolves the duplicate
   `sheathe` binary-name collision).
@@ -103,6 +112,7 @@ Initial release — a pure-Rust HLS/DASH/CMAF media packager, validated against
 Shaka Packager as the reference oracle.
 
 ### Added
+
 - Cargo workspace: `sheathe-core`, `sheathe-mp4`, `sheathe-dash`, `sheathe-hls`,
   `sheathe-crypto`, `sheathe-cli`.
 - **MP4 demuxer**: box reader + full sample-table reconstruction
