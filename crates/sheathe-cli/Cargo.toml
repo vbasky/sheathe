@@ -1,7 +1,6 @@
 [package]
 name = "sheathe-cli"
-# Ahead of the libraries (0.1.0): this version adds the reusable `run()` lib API.
-version = "0.1.1"
+version = "0.1.2"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -10,6 +9,7 @@ authors.workspace = true
 description = "CLI logic for the sheathe media packager (library; the binary is the `sheathe` crate)"
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 sheathe-core.workspace = true

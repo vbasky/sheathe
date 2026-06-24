@@ -9,6 +9,7 @@ authors.workspace = true
 description = "ISO-BMFF / fMP4 / CMAF box writing and fragmentation for the sheathe packager"
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 sheathe-core.workspace = true

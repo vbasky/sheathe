@@ -9,6 +9,7 @@ authors.workspace = true
 description = "Core media model (streams, samples, timing) for the sheathe packager"
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 thiserror.workspace = true

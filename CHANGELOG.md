@@ -4,6 +4,19 @@ All notable changes to **sheathe** are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.2] — 2026-06-24
+
+### Added
+- **CENC `cbcs`** (AES-128-CBC, pattern 1:9) end-to-end — constant-IV `tenc` v1,
+  pattern `senc`, `cbcs` `schm`; `--enc-scheme cbcs`. ffmpeg decrypt+decode verified.
+- **DASH `ContentProtection`** signalling for encrypted output
+  (`mp4protection` scheme + `cenc:default_KID`).
+- **Per-crate READMEs** so every crate renders documentation on crates.io.
+
+### Changed
+- MSRV recorded as **1.85** in the published crate metadata (the dependency tree
+  requires it); all crates republished at 0.1.2.
+
 ## [0.1.1] — 2026-06-24
 
 ### Added
@@ -43,5 +56,6 @@ Shaka Packager as the reference oracle.
 - **Multi-input ABR ladder**: several inputs → one DASH/HLS manifest.
 - CI with an MSRV guard that reads `rust-version` from `Cargo.toml`.
 
+[0.1.2]: https://github.com/vbasky/sheathe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/vbasky/sheathe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/vbasky/sheathe/releases/tag/v0.1.0

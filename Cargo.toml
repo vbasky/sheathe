@@ -12,7 +12,7 @@ members = [
 
 # Shared package metadata, inherited by every crate via `field.workspace = true`.
 [workspace.package]
-version = "0.1.0"
+version = "0.1.2"
 edition = "2021"
 # Real consumer MSRV — CI reads this exact value out of Cargo.toml.
 # 1.85 is the true floor: clap's dependency tree (clap_lex 1.1.0) is edition 2024,
@@ -27,11 +27,11 @@ categories = ["multimedia", "multimedia::video", "command-line-utilities"]
 
 [workspace.dependencies]
 # Internal crates (path deps, version-pinned for crates.io publication).
-sheathe-core = { version = "0.1.0", path = "crates/sheathe-core" }
-sheathe-mp4 = { version = "0.1.0", path = "crates/sheathe-mp4" }
-sheathe-dash = { version = "0.1.0", path = "crates/sheathe-dash" }
-sheathe-hls = { version = "0.1.0", path = "crates/sheathe-hls" }
-sheathe-crypto = { version = "0.1.0", path = "crates/sheathe-crypto" }
+sheathe-core = { version = "0.1.2", path = "crates/sheathe-core" }
+sheathe-mp4 = { version = "0.1.2", path = "crates/sheathe-mp4" }
+sheathe-dash = { version = "0.1.2", path = "crates/sheathe-dash" }
+sheathe-hls = { version = "0.1.2", path = "crates/sheathe-hls" }
+sheathe-crypto = { version = "0.1.2", path = "crates/sheathe-crypto" }
 
 # External.
 thiserror = "1"

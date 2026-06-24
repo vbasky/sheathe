@@ -9,6 +9,7 @@ authors.workspace = true
 description = "HLS master and media playlist generation for the sheathe packager"
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 sheathe-core.workspace = true

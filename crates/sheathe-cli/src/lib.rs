@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use sheathe_core::{MediaKind, Scaled, StreamInfo};
 use sheathe_crypto::{ContentKey, Scheme};
-use sheathe_dash::{Manifest, Representation};
+use sheathe_dash::{Manifest, Protection, Representation};
 use sheathe_hls::{master_playlist, media_playlist, SegmentRef, Variant};
 use sheathe_mp4::{
     write_init_segment, write_media_segment, Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy,
@@ -251,9 +251,18 @@ fn cmd_package(
     }
 
     if dash {
+        let protection = encryption.as_ref().map(|e| Protection {
+            scheme: match e.scheme {
+                Scheme::Cenc => "cenc",
+                Scheme::Cbcs => "cbcs",
+            }
+            .to_string(),
+            default_kid: e.key.kid,
+        });
         let mpd = Manifest {
             duration_seconds: total_seconds,
             representations: dash_reps,
+            protection,
         }
         .to_xml();
         fs::write(out_dir.join("manifest.mpd"), mpd).context("writing manifest.mpd")?;

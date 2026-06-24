@@ -48,14 +48,15 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
 
 `cenc` shipped as part of Phase 1 (VOD core). Remaining DRM breadth:
 
-- 🟡 **CENC `cbcs` (AES-128-CBC, pattern 1:9)** — AES-CBC pattern core done +
-  NIST-vector tested; writer wiring drafted (constant-IV `tenc` v1, pattern
-  `senc`, `cbcs` `schm`) but **not yet ffmpeg-verified**.
-- ⬜ `saiz`/`saio` aux-info boxes (conformance; ffmpeg already decrypts via `senc`).
+- ✅ **CENC `cbcs` (AES-128-CBC, pattern 1:9)**: AES-CBC pattern core (NIST-tested);
+  constant-IV `tenc` v1, pattern `senc`, `cbcs` `schm`. **ffmpeg decrypt+decode
+  verified (video 360 frames + audio).**
+- 🟡 **Manifest encryption signalling**: DASH `ContentProtection`
+  (`mp4protection` + `cenc:default_KID`) and `saiz`/`saio` aux-info boxes.
+- ⬜ HLS `EXT-X-KEY` (SAMPLE-AES / SAMPLE-AES-CTR) + key-delivery URI.
 - ⬜ `cbc1` / `cens` schemes.
 - ⬜ Key sources beyond raw key: Widevine key server, PlayReady, key files.
 - ⬜ Multi-DRM `pssh` (Widevine + PlayReady + common) and key rotation.
-- ⬜ HLS `SAMPLE-AES` + `EXT-X-KEY` / `EXT-X-SESSION-KEY` signalling.
 
 ## Phase 3 — Inputs & codecs ⬜
 

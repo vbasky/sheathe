@@ -26,6 +26,15 @@ pub struct Representation {
     pub segment_durations: Vec<u64>,
 }
 
+/// CENC protection signalling for the manifest (`ContentProtection`).
+#[derive(Debug, Clone)]
+pub struct Protection {
+    /// Scheme value: `cenc` or `cbcs`.
+    pub scheme: String,
+    /// 16-byte default Key ID, rendered as a dashed UUID.
+    pub default_kid: [u8; 16],
+}
+
 /// A complete on-demand presentation.
 #[derive(Debug, Clone, Default)]
 pub struct Manifest {
@@ -33,6 +42,8 @@ pub struct Manifest {
     pub duration_seconds: f64,
     /// All representations, grouped by kind into adaptation sets at render time.
     pub representations: Vec<Representation>,
+    /// When set, emit `ContentProtection` elements (encrypted content).
+    pub protection: Option<Protection>,
 }
 
 impl Manifest {
@@ -40,16 +51,23 @@ impl Manifest {
     pub fn to_xml(&self) -> String {
         let mut s = String::new();
         s.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+        // The `cenc:` namespace is only needed when signalling protection.
+        let cenc_ns = if self.protection.is_some() {
+            " xmlns:cenc=\"urn:mpeg:cenc:2013\""
+        } else {
+            ""
+        };
         // SegmentTemplate + SegmentTimeline is the "live" profile, even for
         // static (VOD) presentations.
         let _ = writeln!(
             s,
             concat!(
-                "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\" ",
+                "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\"{} ",
                 "profiles=\"urn:mpeg:dash:profile:isoff-live:2011\" ",
                 "type=\"static\" mediaPresentationDuration=\"{}\" ",
                 "minBufferTime=\"PT2S\">"
             ),
+            cenc_ns,
             iso8601_duration(self.duration_seconds),
         );
         s.push_str("  <Period>\n");
@@ -72,6 +90,9 @@ impl Manifest {
                 "    <AdaptationSet contentType=\"{}\" segmentAlignment=\"true\">",
                 content_type
             );
+            if let Some(p) = &self.protection {
+                render_content_protection(&mut s, p);
+            }
             for r in reps {
                 render_representation(&mut s, r);
             }
@@ -81,6 +102,33 @@ impl Manifest {
         s.push_str("  </Period>\n</MPD>\n");
         s
     }
+}
+
+/// Emit the standard `mp4protection` ContentProtection with the default KID.
+fn render_content_protection(s: &mut String, p: &Protection) {
+    let _ = writeln!(
+        s,
+        concat!(
+            "      <ContentProtection ",
+            "schemeIdUri=\"urn:mpeg:dash:mp4protection:2011\" ",
+            "value=\"{}\" cenc:default_KID=\"{}\"/>"
+        ),
+        p.scheme,
+        kid_uuid(&p.default_kid),
+    );
+}
+
+/// Format a 16-byte KID as a dashed UUID (8-4-4-4-12).
+fn kid_uuid(kid: &[u8; 16]) -> String {
+    let h: String = kid.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[0..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..32]
+    )
 }
 
 fn render_representation(s: &mut String, r: &Representation) {

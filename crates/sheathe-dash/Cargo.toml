@@ -9,6 +9,7 @@ authors.workspace = true
 description = "MPEG-DASH MPD manifest generation for the sheathe packager"
 keywords.workspace = true
 categories.workspace = true
+readme = "README.md"
 
 [dependencies]
 sheathe-core.workspace = true
