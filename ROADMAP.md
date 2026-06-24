@@ -55,7 +55,12 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
   (`mp4protection` + `cenc:default_KID`); `saiz`/`saio` aux-info boxes (offset
   backpatched to the `senc` data, verified); HLS `#EXT-X-KEY`
   (`SAMPLE-AES` / `SAMPLE-AES-CTR`) with key-delivery URI.
-- ⬜ `cbc1` / `cens` schemes.
+- ✅ **`cbc1` / `cens` schemes** — completing the full CENC scheme matrix.
+  `cbc1` = AES-128-CBC full-region (per-sample IV, block-aligned subsamples);
+  `cens` = AES-128-CTR with 1:9 pattern. Pattern encryption applied to video
+  only; audio is whole-sample (no subsamples) under all schemes, per Shaka /
+  DASH-IF. **`tenc`/`senc` structurally diffed against Shaka Packager; all four
+  schemes ffmpeg decrypt+decode verified (video + audio frame md5).**
 - ⬜ Key sources beyond raw key: Widevine key server, PlayReady, key files.
 - ⬜ Multi-DRM `pssh` (Widevine + PlayReady + common) and key rotation.
 
@@ -97,7 +102,10 @@ WebVTT/TTML text passthrough → Phase 3, alongside the other input/codec work.)
 
 ## Current focus
 
-**Phase 1 is complete.** MP4 in → CMAF out (clear or `cenc`-encrypted), DASH +
-HLS with correct codec strings, audio rendition groups, and multi-input ABR.
-Next up is **Phase 2** (resume `cbcs` and broader DRM) or **Phase 3** (more
+**Phase 1 is complete**, and Phase 2's CENC scheme matrix is now **fully
+implemented**: `cenc`, `cbcs`, `cbc1`, and `cens` all ship end-to-end, each
+structurally diffed against Shaka Packager and ffmpeg decrypt+decode verified.
+Remaining Phase 2 breadth is DRM key sources (Widevine/PlayReady/key files) and
+multi-DRM `pssh` + key rotation. Next up is the rest of **Phase 2** (broader
+DRM) or **Phase 3** (more
 inputs/codecs — MPEG-TS, WebM, additional audio) — to be picked next.

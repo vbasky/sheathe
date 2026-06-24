@@ -13,28 +13,33 @@ use crate::box_writer::{BoxWriter, FourCc};
 use crate::demux::Track;
 use crate::fragmenter::Segment;
 use sheathe_core::{Codec, MediaKind, SampleFlags};
-use sheathe_crypto::{ContentKey, Encryptor, Scheme, Subsample};
+use sheathe_crypto::{ContentKey, Encryptor, Pattern, Scheme, Subsample};
 
 /// CENC encryption parameters for a packaging run.
 pub struct Encryption {
-    /// Protection scheme (`cenc` = per-sample IV CTR; `cbcs` = constant-IV CBC pattern).
+    /// Protection scheme. `cenc`/`cens`/`cbc1` derive a unique per-sample IV;
+    /// `cbcs` reuses [`constant_iv`](Self::constant_iv).
     pub scheme: Scheme,
     /// The content key + KID.
     pub key: ContentKey,
     /// Constant IV used by `cbcs` (stored in `tenc`, reused for every sample).
-    /// Ignored by `cenc`, which derives a unique per-sample IV.
+    /// Ignored by the per-sample-IV schemes.
     pub constant_iv: [u8; 16],
 }
 
 impl Encryption {
-    /// Per-sample IV size written in `tenc`/`senc`: 16 for `cenc`, 0 for `cbcs`
-    /// (which signals a constant IV).
+    /// Per-sample IV size written in `tenc`/`senc`: 0 for `cbcs` (which signals
+    /// a constant IV), 16 for the per-sample-IV schemes.
     fn per_sample_iv_size(&self) -> u8 {
-        match self.scheme {
-            Scheme::Cenc => 16,
-            Scheme::Cbcs => 0,
-        }
+        if self.scheme.uses_constant_iv() { 0 } else { 16 }
     }
+}
+
+/// The crypt/skip pattern for a track under `enc`. Pattern encryption
+/// (`cens`/`cbcs`) is applied to video only; audio (and the non-pattern schemes)
+/// use [`Pattern::NONE`] — matching Shaka Packager / DASH-IF convention.
+fn track_pattern(enc: &Encryption, kind: MediaKind) -> Pattern {
+    if enc.scheme.is_pattern() && kind == MediaKind::Video { Pattern::VIDEO } else { Pattern::NONE }
 }
 
 /// Common PSSH SystemID (`urn:mpeg:dash:mp4protection` / W3C clear-key family).
@@ -334,8 +339,10 @@ fn build_moof(
         w.u8(0); // default_sample_info_size = 0 → per-sample sizes follow
         w.u32(samples.len() as u32);
         for s in samples {
-            // IV (per_sample_iv_size) + subsample_count(2) + N × (clear u16 + protected u32).
-            let size = usize::from(per_sample_iv_size) + 2 + 6 * s.subsamples.len();
+            // IV (per_sample_iv_size) + (when subsamples are present)
+            // subsample_count(2) + N × (clear u16 + protected u32).
+            let sub_bytes = if s.subsamples.is_empty() { 0 } else { 2 + 6 * s.subsamples.len() };
+            let size = usize::from(per_sample_iv_size) + sub_bytes;
             w.u8(size as u8);
         }
         w.end();
@@ -482,36 +489,35 @@ fn protected_sample_entry(track: &Track, enc: &Encryption) -> Vec<u8> {
     w.u32(0x0001_0000); // scheme_version
     w.end();
     w.begin(fcc(b"schi"));
-    write_tenc(&mut w, enc);
+    write_tenc(&mut w, enc, track_pattern(enc, track.info.kind));
     w.end(); // schi
     w.end(); // sinf
     w.end(); // encv/enca
     w.into_bytes()
 }
 
-/// The `tenc` track encryption box. `cenc` uses version 0 with a 16-byte
-/// per-sample IV; `cbcs` uses version 1 with the 1:9 pattern and a constant IV.
-fn write_tenc(w: &mut BoxWriter, enc: &Encryption) {
+/// The `tenc` track encryption box. The non-pattern schemes (`cenc`, `cbc1`)
+/// use version 0; the pattern schemes (`cens`, `cbcs`) use version 1, which
+/// carries this track's crypt/skip block counts (`pattern`, video-only). `cbcs`
+/// signals a constant IV (per-sample IV size 0) and appends it; the other
+/// schemes carry a 16-byte per-sample IV.
+fn write_tenc(w: &mut BoxWriter, enc: &Encryption, pattern: Pattern) {
+    let constant_iv = enc.scheme.uses_constant_iv();
     w.begin(fcc(b"tenc"));
-    match enc.scheme {
-        Scheme::Cenc => {
-            full(w, 0, 0);
-            w.u8(0); // reserved
-            w.u8(0); // reserved (version 0)
-            w.u8(1); // default_isProtected
-            w.u8(16); // default_Per_Sample_IV_Size
-            w.bytes(&enc.key.kid);
-        }
-        Scheme::Cbcs => {
-            full(w, 1, 0);
-            w.u8(0); // reserved
-            w.u8((1 << 4) | 9); // default_crypt_byte_block=1, default_skip_byte_block=9
-            w.u8(1); // default_isProtected
-            w.u8(0); // default_Per_Sample_IV_Size = 0 -> constant IV follows
-            w.bytes(&enc.key.kid);
-            w.u8(16); // default_constant_IV_size
-            w.bytes(&enc.constant_iv);
-        }
+    full(w, if enc.scheme.is_pattern() { 1 } else { 0 }, 0);
+    w.u8(0); // reserved
+    // Version 0: a reserved zero byte. Version 1: packed crypt/skip block counts.
+    if enc.scheme.is_pattern() {
+        w.u8((pattern.crypt_blocks << 4) | (pattern.skip_blocks & 0x0f));
+    } else {
+        w.u8(0);
+    }
+    w.u8(1); // default_isProtected
+    w.u8(if constant_iv { 0 } else { 16 }); // default_Per_Sample_IV_Size
+    w.bytes(&enc.key.kid);
+    if constant_iv {
+        w.u8(16); // default_constant_IV_size
+        w.bytes(&enc.constant_iv);
     }
     w.end();
 }
@@ -544,6 +550,7 @@ fn encrypt_segment(
         _ => 0,
     };
     let video = track.info.kind == MediaKind::Video && header > 0;
+    let pattern = track_pattern(enc, track.info.kind);
 
     segment
         .samples
@@ -551,18 +558,30 @@ fn encrypt_segment(
         .enumerate()
         .map(|(i, s)| {
             let mut data = s.data.clone();
-            let iv = match enc.scheme {
-                Scheme::Cenc => make_iv(track.track_id, first_sample_index + i as u64),
-                Scheme::Cbcs => enc.constant_iv,
-            };
-            let subsamples = if video {
-                video_subsamples(&data, nal_len, header)
+            let iv = if enc.scheme.uses_constant_iv() {
+                enc.constant_iv
             } else {
-                vec![Subsample { clear: 0, protected: data.len() as u32 }]
+                make_iv(track.track_id, first_sample_index + i as u64)
+            };
+            // Video carries NAL-aware subsamples (recorded in `senc`); audio is
+            // encrypted whole-sample with no subsamples — the convention all four
+            // schemes follow, and what `cbcs`/`cens` require (a patternless track
+            // must not advertise subsamples).
+            let (cipher_subs, senc_subs) = if video {
+                let mut subs = video_subsamples(&data, nal_len, header);
+                // Non-pattern CBC (`cbc1`) encrypts whole 16-byte blocks only, so
+                // each protected run must be block-aligned; trailing partial bytes
+                // move into the clear. CTR and pattern-CBC accept any size.
+                if enc.scheme.is_cbc() && pattern == Pattern::NONE {
+                    subs = align_cbc_subsamples(&subs);
+                }
+                (subs.clone(), subs)
+            } else {
+                (vec![Subsample { clear: 0, protected: data.len() as u32 }], Vec::new())
             };
             // Encryption never changes length; ignore the validated result.
-            let _ = encryptor.encrypt(enc.scheme, &iv, &mut data, &subsamples);
-            SampleEnc { iv, subsamples, data }
+            let _ = encryptor.encrypt(enc.scheme, pattern, &iv, &mut data, &cipher_subs);
+            SampleEnc { iv, subsamples: senc_subs, data }
         })
         .collect()
 }
@@ -595,6 +614,24 @@ fn video_subsamples(data: &[u8], nal_len: u8, header: usize) -> Vec<Subsample> {
     subs
 }
 
+/// Floor each subsample's protected run to a 16-byte multiple, moving the
+/// remainder into the clear bytes of the following run (or a final clear-only
+/// run). Required by the non-pattern CBC schemes, whose `BytesOfProtectedData`
+/// must be a whole number of AES blocks.
+fn align_cbc_subsamples(subsamples: &[Subsample]) -> Vec<Subsample> {
+    let mut out = Vec::with_capacity(subsamples.len() + 1);
+    let mut carry = 0u32; // partial-block tail carried from the previous run
+    for s in subsamples {
+        let aligned = s.protected - s.protected % 16;
+        out.push(Subsample { clear: s.clear + carry, protected: aligned });
+        carry = s.protected - aligned;
+    }
+    if carry > 0 {
+        out.push(Subsample { clear: carry, protected: 0 });
+    }
+    out
+}
+
 /// Per-sample IV: track_id in the high 4 bytes, a global sample counter in the
 /// low 8 — unique per (track, sample) under one key.
 fn make_iv(track_id: u32, counter: u64) -> [u8; 16] {
@@ -605,19 +642,25 @@ fn make_iv(track_id: u32, counter: u64) -> [u8; 16] {
 }
 
 /// The `senc` box: optional per-sample IV (omitted when `iv_size` is 0, i.e.
-/// `cbcs` with a constant IV) + subsample clear/protected runs.
+/// `cbcs` with a constant IV) + subsample clear/protected runs. The
+/// `use_subsamples` flag and the per-sample subsample entries are only written
+/// for tracks that carry subsamples (video); whole-sample tracks (audio) omit
+/// both — required for the patternless `cbcs`/`cens` audio case.
 fn write_senc(w: &mut BoxWriter, samples: &[SampleEnc], iv_size: u8) {
+    let use_subsamples = samples.first().is_some_and(|s| !s.subsamples.is_empty());
     w.begin(fcc(b"senc"));
-    full(w, 0, 0x00_0002); // flags: use_subsamples
+    full(w, 0, if use_subsamples { 0x00_0002 } else { 0 });
     w.u32(samples.len() as u32);
     for s in samples {
         if iv_size > 0 {
             w.bytes(&s.iv[..iv_size as usize]);
         }
-        w.u16(s.subsamples.len() as u16);
-        for ss in &s.subsamples {
-            w.u16(ss.clear as u16);
-            w.u32(ss.protected);
+        if use_subsamples {
+            w.u16(s.subsamples.len() as u16);
+            for ss in &s.subsamples {
+                w.u16(ss.clear as u16);
+                w.u32(ss.protected);
+            }
         }
     }
     w.end();

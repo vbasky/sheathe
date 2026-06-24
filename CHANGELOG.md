@@ -6,7 +6,20 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **CENC `cbc1` and `cens` schemes** (`--enc-scheme cbc1|cens`), completing the
+  ISO/IEC 23001-7 scheme matrix alongside `cenc`/`cbcs`. `cbc1` is full-region
+  AES-128-CBC with a per-sample IV; `cens` is AES-128-CTR with 1:9 pattern
+  encryption. `tenc` version, crypt/skip pattern bytes, and `senc` subsample
+  signalling were differentially matched against Shaka Packager, and every
+  scheme is ffmpeg decrypt+decode verified (video + audio frame md5).
+
 ### Changed
+- **Pattern encryption is now video-only**, matching Shaka / DASH-IF: under
+  `cens`/`cbcs`, audio is encrypted whole-sample (`tenc` pattern `0:0`) instead
+  of carrying the 1:9 pattern. Audio tracks now emit `senc` without the
+  `use_subsamples` flag or subsample entries (whole-sample encryption), which
+  the patternless `cbcs`/`cens` audio case requires for player compatibility.
 - Versioning conformed to the template: explicit per-crate `version` (no shared
   `workspace.package.version`) and path-first internal dependency pins, so
   `scripts/release.sh` / `just release <version>` bumps every crate + pin in one

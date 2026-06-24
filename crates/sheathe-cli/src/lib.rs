@@ -55,8 +55,8 @@ enum Command {
         /// 32 hex chars).
         #[arg(long, value_name = "KID:KEY")]
         enc_key: Option<String>,
-        /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR) or
-        /// `cbcs` (AES-CBC pattern).
+        /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR),
+        /// `cens` (AES-CTR pattern), `cbc1` (AES-CBC) or `cbcs` (AES-CBC pattern).
         #[arg(long, default_value = "cenc")]
         enc_scheme: String,
         /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
@@ -122,7 +122,7 @@ fn cmd_probe(input: &str) -> Result<()> {
 struct EncryptionOpts<'a> {
     /// `<KID hex>:<KEY hex>` raw key, or `None` for clear output.
     key: Option<&'a str>,
-    /// `cenc` or `cbcs`.
+    /// `cenc`, `cens`, `cbc1` or `cbcs`.
     scheme: &'a str,
     /// HLS `#EXT-X-KEY` delivery URI.
     key_uri: &'a str,
@@ -142,8 +142,10 @@ fn cmd_package(
 
     // HLS `#EXT-X-KEY` signalling for encrypted output.
     let hls_key = encryption.as_ref().map(|_| KeyInfo {
+        // HLS fMP4 maps the CBC schemes to SAMPLE-AES and the CTR schemes to
+        // SAMPLE-AES-CTR.
         method: match enc.scheme {
-            "cbcs" => "SAMPLE-AES",
+            "cbcs" | "cbc1" => "SAMPLE-AES",
             _ => "SAMPLE-AES-CTR",
         }
         .to_string(),
@@ -166,6 +168,8 @@ fn cmd_package(
     println!("  segment_duration = {segment_duration}s  (dash={dash}, hls={hls})");
     if encryption.is_some() {
         let alg = match enc.scheme {
+            "cens" => "cens (AES-128-CTR pattern)",
+            "cbc1" => "cbc1 (AES-128-CBC)",
             "cbcs" => "cbcs (AES-128-CBC pattern)",
             _ => "cenc (AES-128-CTR)",
         };
@@ -256,6 +260,8 @@ fn cmd_package(
         let protection = encryption.as_ref().map(|e| Protection {
             scheme: match e.scheme {
                 Scheme::Cenc => "cenc",
+                Scheme::Cens => "cens",
+                Scheme::Cbc1 => "cbc1",
                 Scheme::Cbcs => "cbcs",
             }
             .to_string(),
@@ -284,8 +290,12 @@ fn parse_enc_key(spec: &str, scheme: &str) -> Result<Encryption> {
     let key = parse_hex16(key_hex).context("invalid KEY")?;
     let scheme = match scheme {
         "cenc" => Scheme::Cenc,
+        "cens" => Scheme::Cens,
+        "cbc1" => Scheme::Cbc1,
         "cbcs" => Scheme::Cbcs,
-        other => anyhow::bail!("unknown --enc-scheme '{other}' (expected cenc or cbcs)"),
+        other => {
+            anyhow::bail!("unknown --enc-scheme '{other}' (expected cenc, cens, cbc1 or cbcs)")
+        }
     };
     // A fixed, asset-wide constant IV for cbcs (cenc derives per-sample IVs and
     // ignores this).
