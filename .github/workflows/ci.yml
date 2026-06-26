@@ -22,7 +22,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install rust
         run: |
@@ -31,7 +31,7 @@ jobs:
           rustup component add clippy rustfmt
 
       - name: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -60,7 +60,7 @@ jobs:
     name: msrv (1.85)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: install rust 1.85
         run: |
@@ -68,7 +68,7 @@ jobs:
           rustup default 1.85
 
       - name: cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -83,5 +83,5 @@ jobs:
     name: cargo-deny (advisories + licenses + bans)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2

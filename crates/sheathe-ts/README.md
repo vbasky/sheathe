@@ -31,7 +31,6 @@ segment → DASH/HLS manifests, with no C/C++ dependencies.
 | [`sheathe-core`](crates/sheathe-core)     | Media model: streams, samples, timing, errors | `media/base` |
 | [`sheathe-mp4`](crates/sheathe-mp4)       | ISO-BMFF / fMP4 / CMAF box writing + fragmentation | `media/formats/mp4` + chunking |
 | [`sheathe-ts`](crates/sheathe-ts)         | MPEG-2 transport stream demux (PAT/PMT/PES) | `media/formats/mpeg` |
-| [`sheathe-es`](crates/sheathe-es)         | Raw elementary stream demux (Annex B, ADTS) | `media/formats` |
 | [`sheathe-dash`](crates/sheathe-dash)     | MPEG-DASH `.mpd` generation | `mpd` |
 | [`sheathe-hls`](crates/sheathe-hls)       | HLS master + media playlist generation | `hls` |
 | [`sheathe-crypto`](crates/sheathe-crypto) | Common Encryption (cenc / cbcs) | `media/crypto` |
@@ -54,7 +53,6 @@ sheathe package input.mp4 --out site/ --segment-duration 6 --dash --hls
 # Inspect what sheathe detects in a file (MP4 or MPEG-TS).
 sheathe probe input.mp4
 sheathe probe input.ts
-sheathe package input.h264 input.aac --out site/ --dash --hls
 
 # Differential-test against Shaka Packager (when `packager` is on PATH).
 just oracle input.mp4

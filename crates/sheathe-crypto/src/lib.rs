@@ -22,8 +22,7 @@
 //! via the [`Subsample`] list, so this crate stays format-agnostic.
 
 use aes::Aes128;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{BlockCipherEncrypt, KeyInit};
 use sheathe_core::{Error, Result};
 
 mod pssh;
@@ -139,7 +138,7 @@ pub struct Encryptor {
 impl Encryptor {
     /// Build an encryptor for a 16-byte AES-128 key.
     pub fn new(key: &[u8; 16]) -> Self {
-        Self { cipher: Aes128::new(GenericArray::from_slice(key)) }
+        Self { cipher: Aes128::new_from_slice(key).expect("AES-128 key is 16 bytes") }
     }
 
     /// Encrypt `data` in place under `scheme` with the given `pattern`, treating
@@ -237,7 +236,7 @@ impl Encryptor {
 
     /// Encrypt one 16-byte block in place (AES-128-ECB primitive).
     fn encrypt_block(&self, block: &mut [u8; 16]) {
-        let mut ga = GenericArray::clone_from_slice(block);
+        let mut ga = (*block).into();
         self.cipher.encrypt_block(&mut ga);
         block.copy_from_slice(&ga);
     }

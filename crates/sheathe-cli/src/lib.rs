@@ -13,9 +13,13 @@ use sheathe_core::{MediaKind, Scaled, StreamInfo};
 use sheathe_crypto::{ContentKey, ProtectionSystem, Scheme};
 use sheathe_dash::{Manifest, Protection, Representation};
 use sheathe_hls::{KeyInfo, SegmentRef, Variant, master_playlist, media_playlist};
+use sheathe_core::Sample;
 use sheathe_mp4::{
-    Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy, write_init_segment, write_media_segment,
+    Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy, Track, write_init_segment,
+    write_media_segment,
 };
+use sheathe_es::{EsDemuxer, is_mp4};
+use sheathe_ts::{TsDemuxer, packet::PACKET_SIZE};
 use std::fs;
 use std::path::Path;
 
@@ -91,11 +95,13 @@ enum Command {
 
 /// Parse CLI args and run the requested command.
 pub fn run() -> Result<()> {
-    let cli = Cli::parse();
-
-    if !cli.no_banner {
+    // Clap handles `--help` / `--version` inside `parse()` and exits before
+    // returning, so the banner must be printed first.
+    if !std::env::args().any(|a| a == "--no-banner") {
         banner::print();
     }
+
+    let cli = Cli::parse();
 
     match cli.command {
         Command::Package {
@@ -131,17 +137,100 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-/// Read an MP4 and print the streams sheathe detects.
+/// Read an input file and print the streams sheathe detects.
 fn cmd_probe(input: &str) -> Result<()> {
     let bytes = fs::read(input).with_context(|| format!("reading {input}"))?;
-    let demux = Mp4Demuxer::parse(&bytes).with_context(|| format!("parsing {input}"))?;
+    let loaded = load_input(input, &bytes)?;
 
-    println!("probe: {input}  ({} bytes, {} track(s))", bytes.len(), demux.tracks().len());
-    for (i, track) in demux.tracks().iter().enumerate() {
-        println!("  [{}] track #{}  {}", i, track.track_id, describe(&track.info));
-        println!("       samples={}  timescale={}", track.sample_count, track.info.timescale.0);
+    println!(
+        "probe: {input}  ({} bytes, {} track(s), {})",
+        bytes.len(),
+        loaded.tracks.len(),
+        loaded.format
+    );
+    for (i, t) in loaded.tracks.iter().enumerate() {
+        println!("  [{}] track #{}  {}", i, t.track.track_id, describe(&t.track.info));
+        println!(
+            "       samples={}  timescale={}",
+            t.samples.len(),
+            t.track.info.timescale.0
+        );
     }
     Ok(())
+}
+
+/// A loaded input with pre-extracted tracks and samples.
+struct LoadedInput {
+    format: &'static str,
+    tracks: Vec<LoadedTrack>,
+}
+
+struct LoadedTrack {
+    track: Track,
+    samples: Vec<Sample>,
+}
+
+/// Detect MPEG-TS by 0x47 sync bytes at 188-byte intervals.
+fn is_transport_stream(data: &[u8]) -> bool {
+    if data.len() < PACKET_SIZE * 3 {
+        return false;
+    }
+    (0..3).all(|i| data[i * PACKET_SIZE] == 0x47)
+}
+
+fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
+    if is_transport_stream(data) {
+        let demux = TsDemuxer::parse(data).with_context(|| format!("parsing MPEG-TS {path}"))?;
+        let tracks = demux
+            .tracks()
+            .iter()
+            .enumerate()
+            .map(|(i, t)| LoadedTrack {
+                track: Track::from_sample_entry(
+                    t.info.clone(),
+                    (i + 1) as u32,
+                    t.sample_entry.clone(),
+                    &t.samples,
+                ),
+                samples: t.samples.clone(),
+            })
+            .collect();
+        return Ok(LoadedInput { format: "MPEG-TS", tracks });
+    }
+
+    if is_mp4(data) {
+        return load_mp4(path, data);
+    }
+
+    if sheathe_es::detect(path, data).is_some() {
+        let demux = EsDemuxer::parse_auto(path, data)
+            .with_context(|| format!("parsing elementary stream {path}"))?;
+        let t = demux.track();
+        let tracks = vec![LoadedTrack {
+            track: Track::from_sample_entry(
+                t.info.clone(),
+                1,
+                t.sample_entry.clone(),
+                &t.samples,
+            ),
+            samples: t.samples.clone(),
+        }];
+        return Ok(LoadedInput { format: "elementary", tracks });
+    }
+
+    load_mp4(path, data)
+}
+
+fn load_mp4(path: &str, data: &[u8]) -> Result<LoadedInput> {
+    let demux = Mp4Demuxer::parse(data).with_context(|| format!("parsing MP4 {path}"))?;
+    let mut tracks = Vec::new();
+    for (i, t) in demux.tracks().iter().enumerate() {
+        tracks.push(LoadedTrack {
+            track: t.clone(),
+            samples: demux.samples(i).with_context(|| format!("reading samples for track {i}"))?,
+        });
+    }
+    Ok(LoadedInput { format: "MP4", tracks })
 }
 
 /// Demux, fragment, and write CMAF init + media segments plus DASH/HLS manifests
@@ -195,15 +284,14 @@ fn cmd_package(
         uri: enc.key_uri.to_string(),
     });
 
-    // Read then parse all inputs (each demuxer borrows its byte buffer).
     let datas: Vec<Vec<u8>> = inputs
         .iter()
         .map(|p| fs::read(p).with_context(|| format!("reading {p}")))
         .collect::<Result<_>>()?;
-    let demuxers: Vec<Mp4Demuxer> = datas
+    let loaded: Vec<LoadedInput> = datas
         .iter()
         .zip(inputs)
-        .map(|(d, p)| Mp4Demuxer::parse(d).with_context(|| format!("parsing {p}")))
+        .map(|(d, p)| load_input(p, d))
         .collect::<Result<_>>()?;
 
     println!("package: {} input(s) -> {out}/", inputs.len());
@@ -228,12 +316,12 @@ fn cmd_package(
     let mut total_seconds = 0.0_f64;
     let mut rep = 0usize; // global rendition index across all inputs/tracks
 
-    for demux in &demuxers {
-        for ti in 0..demux.tracks().len() {
-            let track = &demux.tracks()[ti];
-            let samples = demux.samples(ti)?;
+    for input in &loaded {
+        for lt in &input.tracks {
+            let track = &lt.track;
+            let samples = &lt.samples;
             let mut frag = Fragmenter::new(track.info.clone(), policy);
-            for s in samples {
+            for s in samples.iter().cloned() {
                 frag.push(s)?;
             }
             let segments = frag.finish();

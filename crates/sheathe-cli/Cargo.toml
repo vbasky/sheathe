@@ -6,19 +6,26 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "CLI logic for the sheathe media packager (library; the binary is the `sheathe` crate)"
+description = "Pure-Rust HLS/DASH/CMAF media packager"
 keywords.workspace = true
 categories.workspace = true
 readme = "README.md"
 
+[build-dependencies]
+image.workspace = true
+
 [dependencies]
 sheathe-core.workspace = true
 sheathe-mp4.workspace = true
+sheathe-ts.workspace = true
+sheathe-es.workspace = true
 sheathe-dash.workspace = true
 sheathe-hls.workspace = true
 sheathe-crypto.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+base64.workspace = true
+crossterm.workspace = true
 
 [lints]
 workspace = true

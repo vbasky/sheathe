@@ -7,6 +7,22 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+
+- **`sheathe-es`** — raw elementary stream demuxer (Phase 3): Annex B H.264/HEVC
+  and ADTS-AAC inputs (`.h264`, `.hevc`, `.aac`, …) with access-unit / frame
+  splitting; wired into `probe` and `package`.
+- **`sheathe-ts`** — MPEG-2 transport stream demuxer (Phase 3): PAT/PMT/PES
+  parsing, H.264 + HEVC Annex B and ADTS-AAC sample extraction, `avc1`/`hvc1`/`mp4a`
+  sample-entry synthesis from elementary stream headers. `probe` and `package`
+  accept `.ts` inputs (sync-byte detection). Hermetic synthetic-TS integration tests.
+- **Shaka oracle harness** — `just oracle <input>` / `scripts/shaka_oracle.sh`
+  packages the same asset with sheathe and Shaka Packager and diffs segment counts
+  and canonical MPD (when `packager` and `xmllint` are available).
+
+## [0.2.0] — 2026-06-25
+
+### Added (0.2.0)
+
 - **CENC `cbc1` and `cens` schemes** (`--enc-scheme cbc1|cens`), completing the
   ISO/IEC 23001-7 scheme matrix alongside `cenc`/`cbcs`. `cbc1` is full-region
   AES-128-CBC with a per-sample IV; `cens` is AES-128-CTR with 1:9 pattern
@@ -27,19 +43,17 @@ All notable changes to **sheathe** are documented here. The format is based on
   file (with `#` comments), keeping the key out of the process arguments.
 
 ### Changed
+
 - **Pattern encryption is now video-only**, matching Shaka / DASH-IF: under
   `cens`/`cbcs`, audio is encrypted whole-sample (`tenc` pattern `0:0`) instead
   of carrying the 1:9 pattern. Audio tracks now emit `senc` without the
   `use_subsamples` flag or subsample entries (whole-sample encryption), which
   the patternless `cbcs`/`cens` audio case requires for player compatibility.
-- Versioning conformed to the template: explicit per-crate `version` (no shared
-  `workspace.package.version`) and path-first internal dependency pins, so
-  `scripts/release.sh` / `just release <version>` bumps every crate + pin in one
-  pass. No published-crate changes.
 
 ## [0.1.4] — 2026-06-24
 
-### Added
+### Added (0.1.4)
+
 - **`saiz`/`saio`** CENC sample-auxiliary-information boxes in media segments
   (DASH-IF conformance); `saio` offset is backpatched to point at the `senc`
   per-sample data (verified). ffmpeg decryption still passes.
@@ -49,11 +63,13 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [0.1.3] — 2026-06-24
 
-### Added
+### Added (0.1.3)
+
 - DASH `ContentProtection` signalling (`mp4protection` + `cenc:default_KID`) for
   encrypted output, so players recognise protected content.
 
 ### Changed
+
 - **Conformed the workspace to the `rust-boilerplate` template**: edition 2024,
   `resolver = "3"`, `[workspace.lints]` (rust / rustdoc / clippy) inherited by
   every crate, `thiserror` 2.
@@ -67,27 +83,31 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [0.1.2] — 2026-06-24
 
-### Added
+### Added (0.1.2)
+
 - **CENC `cbcs`** (AES-128-CBC, pattern 1:9) end-to-end — constant-IV `tenc` v1,
   pattern `senc`, `cbcs` `schm`; `--enc-scheme cbcs`. ffmpeg decrypt+decode verified.
 - **DASH `ContentProtection`** signalling for encrypted output
   (`mp4protection` scheme + `cenc:default_KID`).
 - **Per-crate READMEs** so every crate renders documentation on crates.io.
 
-### Changed
+### Changed (0.1.2)
+
 - MSRV recorded as **1.85** in the published crate metadata (the dependency tree
   requires it); all crates republished at 0.1.2.
 
 ## [0.1.1] — 2026-06-24
 
-### Added
+### Added (0.1.1)
+
 - **`sheathe` crate** — the canonical install target: `cargo install sheathe`
   provides the `sheathe` binary.
 - **Release workflow** (`.github/workflows/release.yml`): on a `v*` tag, builds
   the `sheathe` binary for `x86_64-unknown-linux-gnu`, `aarch64-apple-darwin`,
   and `x86_64-apple-darwin`, and attaches the archives to a GitHub Release.
 
-### Changed
+### Changed (0.1.1)
+
 - **`sheathe-cli` is now library-only**, exposing `pub fn run()`; the binary it
   used to provide moved to the new `sheathe` crate (resolves the duplicate
   `sheathe` binary-name collision).
@@ -100,7 +120,8 @@ All notable changes to **sheathe** are documented here. The format is based on
 Initial release — a pure-Rust HLS/DASH/CMAF media packager, validated against
 Shaka Packager as the reference oracle.
 
-### Added
+### Added (0.1.0)
+
 - Cargo workspace: `sheathe-core`, `sheathe-mp4`, `sheathe-dash`, `sheathe-hls`,
   `sheathe-crypto`, `sheathe-cli`.
 - **MP4 demuxer**: box reader + full sample-table reconstruction
@@ -117,6 +138,7 @@ Shaka Packager as the reference oracle.
 - **Multi-input ABR ladder**: several inputs → one DASH/HLS manifest.
 - CI with an MSRV guard that reads `rust-version` from `Cargo.toml`.
 
+[0.2.0]: https://github.com/vbasky/sheathe/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/vbasky/sheathe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/vbasky/sheathe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/vbasky/sheathe/compare/v0.1.1...v0.1.2

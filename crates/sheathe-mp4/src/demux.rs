@@ -42,6 +42,24 @@ impl Track {
     pub fn sample_entry(&self) -> &[u8] {
         &self.sample_entry
     }
+
+    /// Build a track from a pre-built sample entry and an already-extracted
+    /// sample list (e.g. MPEG-TS demux). The internal sample table is empty;
+    /// callers must supply samples separately.
+    pub fn from_sample_entry(
+        info: StreamInfo,
+        track_id: u32,
+        sample_entry: Vec<u8>,
+        samples: &[Sample],
+    ) -> Self {
+        Self {
+            info,
+            track_id,
+            sample_count: samples.len() as u32,
+            sample_entry,
+            table: SampleTable::default(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
