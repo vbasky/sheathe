@@ -81,11 +81,18 @@ servers (an external-service dependency, see below).
   a live server endpoint, so they can't be implemented or oracle-verified in
   this hermetic setup — deferred as an external-service dependency.
 
-## Phase 3 — Inputs & codecs ⬜
+## Phase 3 — Inputs & codecs 🟡
 
-- ⬜ MPEG-2 TS demux (PAT/PMT/PES, ADTS-AAC, H.264/H.265 in Annex B).
+- ✅ MPEG-2 TS demux (PAT/PMT/PES, ADTS-AAC, H.264/H.265 in Annex B).
+  `sheathe-ts`: PAT/PMT/PES reassembly, H.264 + HEVC Annex B + ADTS-AAC sample
+  extraction, `avc1`/`hvc1`/`mp4a` sample-entry synthesis; wired into `probe` and
+  `package`. Hermetic synthetic-TS integration tests. Oracle diff on a real TS
+  corpus still open.
 - ⬜ WebM/Matroska demux (VP8/VP9/AV1/Opus/Vorbis).
-- ⬜ Raw elementary stream inputs (H.264/H.265 Annex B, AAC-ADTS, AC-3).
+- 🟡 Raw elementary stream inputs (H.264/H.265 Annex B, AAC-ADTS, AC-3).
+  `sheathe-es`: extension + content sniffing, Annex B access-unit splitting,
+  ADTS-AAC frame extraction; wired into `probe` and `package`. AC-3 and oracle
+  diff still open.
 - ⬜ Audio: AC-3 / E-AC-3, Opus, FLAC, MP3 sample entries + codec strings.
 - ⬜ Text passthrough: WebVTT / TTML (IMSC) segmented output.
 - ⬜ Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
@@ -109,9 +116,9 @@ servers (an external-service dependency, see below).
 
 ## Cross-cutting — Conformance & quality ⬜ / 🟡
 
-- 🟡 Hermetic unit/integration tests per crate (synthetic MP4, structural assertions).
-- ⬜ **Differential harness vs Shaka Packager**: run both on a corpus; diff CMAF
-  box structure, MPD (canonical XML), and HLS (normalized) — track oracle deltas.
+- 🟡 Hermetic unit/integration tests per crate (synthetic MP4 + MPEG-TS, structural assertions).
+- 🟡 **Differential harness vs Shaka Packager**: `just oracle <input>` runs both;
+  diff CMAF box structure, MPD (canonical XML), and HLS (normalized) — track oracle deltas.
 - ⬜ External conformance: DASH-IF validator, Apple `mediastreamvalidator`, Widevine/PlayReady test vectors.
 - ⬜ Fuzzing of the demuxer/box reader.
 
@@ -126,5 +133,8 @@ and ffmpeg decrypt+decode verified. The only Phase 2 item left is live network
 key servers, deferred as an external-service dependency that can't be
 oracle-verified in a hermetic setup.
 
-Next up is **Phase 3** — more inputs and codecs (MPEG-TS demux, WebM/Matroska,
-raw elementary streams, additional audio codecs, and WebVTT/TTML text).
+**Current focus: Phase 3** — complete the full inputs & codecs phase before
+releasing **0.3** (no partial milestone releases). MPEG-TS demux (`sheathe-ts`) is
+the first deliverable; remaining: oracle-close TS on a real corpus, WebM/Matroska,
+raw elementary streams, additional audio codecs, and WebVTT/TTML text. The Shaka
+oracle harness (`just oracle`) is scaffolded for corpus regression as inputs broaden.

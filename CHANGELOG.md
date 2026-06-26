@@ -6,6 +6,18 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+### Added
+- **`sheathe-es`** — raw elementary stream demuxer (Phase 3): Annex B H.264/HEVC
+  and ADTS-AAC inputs (`.h264`, `.hevc`, `.aac`, …) with access-unit / frame
+  splitting; wired into `probe` and `package`.
+- **`sheathe-ts`** — MPEG-2 transport stream demuxer (Phase 3): PAT/PMT/PES
+  parsing, H.264 + HEVC Annex B and ADTS-AAC sample extraction, `avc1`/`hvc1`/`mp4a`
+  sample-entry synthesis from elementary stream headers. `probe` and `package`
+  accept `.ts` inputs (sync-byte detection). Hermetic synthetic-TS integration tests.
+- **Shaka oracle harness** — `just oracle <input>` / `scripts/shaka_oracle.sh`
+  packages the same asset with sheathe and Shaka Packager and diffs segment counts
+  and canonical MPD (when `packager` and `xmllint` are available).
+
 ### Changed
 - Updated **`aes` to 0.9** (RustCrypto `cipher` 0.5; `generic-array` →
   `hybrid-array`). No behavioural change — AES-CTR/CBC/ECB outputs verified
@@ -41,10 +53,6 @@ All notable changes to **sheathe** are documented here. The format is based on
   of carrying the 1:9 pattern. Audio tracks now emit `senc` without the
   `use_subsamples` flag or subsample entries (whole-sample encryption), which
   the patternless `cbcs`/`cens` audio case requires for player compatibility.
-- Versioning conformed to the template: explicit per-crate `version` (no shared
-  `workspace.package.version`) and path-first internal dependency pins, so
-  `scripts/release.sh` / `just release <version>` bumps every crate + pin in one
-  pass. No published-crate changes.
 
 ## [0.1.4] — 2026-06-24
 
@@ -134,6 +142,7 @@ Shaka Packager as the reference oracle.
 - **Multi-input ABR ladder**: several inputs → one DASH/HLS manifest.
 - CI with an MSRV guard that reads `rust-version` from `Cargo.toml`.
 
+[0.2.0]: https://github.com/vbasky/sheathe/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/vbasky/sheathe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/vbasky/sheathe/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/vbasky/sheathe/compare/v0.1.1...v0.1.2

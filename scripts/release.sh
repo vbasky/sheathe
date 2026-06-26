@@ -26,6 +26,8 @@ CRATES=(
     sheathe-dash
     sheathe-hls
     sheathe-mp4
+    sheathe-ts
+    sheathe-es
     sheathe-cli
     sheathe
 )

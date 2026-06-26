@@ -46,6 +46,10 @@ check-all: fmt-check
 run *args:
     cargo run -p sheathe -- {{args}}
 
+# Differential-test sheathe vs Shaka Packager on an input (requires packager on PATH)
+oracle input segment_seconds='6':
+    ./scripts/shaka_oracle.sh {{input}} {{segment_seconds}}
+
 # Audit advisories + licenses + bans (requires: cargo install cargo-deny)
 deny:
     cargo deny check
