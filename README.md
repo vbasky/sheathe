@@ -8,15 +8,19 @@
 [![crates.io](https://img.shields.io/crates/v/sheathe.svg?logo=rust&label=crates.io)](https://crates.io/crates/sheathe)
 [![docs.rs](https://img.shields.io/docsrs/sheathe?logo=docs.rs&label=docs.rs)](https://docs.rs/sheathe)
 [![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Medium](https://img.shields.io/badge/Medium-read%20the%20story-black?logo=medium)](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
 
 **Pure-Rust HLS / DASH / CMAF media packager.** A memory-safe, dependency-light
 alternative to [Shaka Packager](https://github.com/shaka-project/shaka-packager),
 built and validated against it as the reference oracle.
 
-> Status: **working VOD pipeline.** `probe` and `package` demux MP4 and MPEG-TS
-> and write playable CMAF segments + DASH/HLS manifests with correct codec strings.
-> The path to Shaka Packager parity (encryption, more inputs, live) is tracked
-> in [`ROADMAP.md`](./ROADMAP.md).
+📖 **Read the story:** [Packaging the World's Video in Pure Rust](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
+
+> Status: **working VOD pipeline + encryption.** `probe` and `package` demux MP4
+> and MPEG-TS and write playable CMAF segments + DASH/HLS manifests with correct
+> codec strings, plus all four CENC schemes (`cenc`/`cens`/`cbc1`/`cbcs`) with
+> multi-DRM `pssh` and key rotation. The path to full Shaka Packager parity (more
+> inputs, live) is tracked in [`ROADMAP.md`](./ROADMAP.md).
 
 ## Why
 
