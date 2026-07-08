@@ -1,13 +1,20 @@
 //! Elementary stream track building (shared by MPEG-TS and raw ES demuxers).
 
 use crate::aac_entry::{aac_codec_string, mp4a_sample_entry};
+use crate::ac3::{first_header as ac3_first_header, frames as ac3_frames};
+use crate::ac3_entry::{ac3_codec_string, ac3_sample_entry};
 use crate::adts::{frames as adts_frames, sample_rate_hz};
 use crate::annexb::{
     avc_access_units, hevc_access_units, hevc_parameter_sets, hevc_pes_sample, parameter_sets,
     pes_sample,
 };
 use crate::avcc::{avc_codec_string, avc1_sample_entry};
+use crate::eac3::{first_header as eac3_first_header, frames as eac3_frames};
+use crate::eac3_entry::{eac3_codec_string, eac3_sample_entry};
+use crate::flac_entry::{flac_codec_string, flac_sample_entry};
 use crate::hvcc::{hevc_codec_string, hvc1_sample_entry, hvcc_bytes};
+use crate::mp3::{first_header as mp3_first_header, frames as mp3_frames};
+use crate::mp3_entry::{mp3_codec_string, mp3_sample_entry};
 use sheathe_core::{Codec, Error, MediaKind, Result, Sample, StreamInfo, Timescale};
 
 /// Default video frame duration in 90 kHz ticks (25 fps).
@@ -124,6 +131,94 @@ pub fn aac_adts(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(sample_rate),
         bitrate: None,
         codec_string: aac_codec_string(&first.data),
+    };
+    Ok(ElementaryTrack { info, samples, sample_entry })
+}
+
+/// Build an AC-3 track from a raw elementary byte stream (ATSC A/52).
+pub fn ac3(data: &[u8]) -> Result<ElementaryTrack> {
+    let header =
+        ac3_first_header(data).ok_or_else(|| Error::malformed("AC-3: no valid syncframe found"))?;
+    let samples = ac3_frames(data, header.sample_rate);
+    let Some(first) = samples.first() else {
+        return Err(Error::malformed("AC-3: no syncframes found"));
+    };
+    let sample_entry = ac3_sample_entry(&first.data)
+        .ok_or_else(|| Error::malformed("AC-3: could not build ac-3 sample entry"))?;
+    let info = StreamInfo {
+        kind: MediaKind::Audio,
+        codec: Codec::Ac3,
+        timescale: Timescale::MPEG_TS,
+        resolution: None,
+        sample_rate: Some(header.sample_rate),
+        bitrate: None,
+        codec_string: Some(ac3_codec_string()),
+    };
+    Ok(ElementaryTrack { info, samples, sample_entry })
+}
+
+/// Build an E-AC-3 track from a raw elementary byte stream (ETSI TS 102 366 Annex E).
+pub fn eac3(data: &[u8]) -> Result<ElementaryTrack> {
+    let header = eac3_first_header(data)
+        .ok_or_else(|| Error::malformed("E-AC-3: no valid syncframe found"))?;
+    let samples = eac3_frames(data);
+    let Some(first) = samples.first() else {
+        return Err(Error::malformed("E-AC-3: no syncframes found"));
+    };
+    let sample_entry = eac3_sample_entry(&first.data)
+        .ok_or_else(|| Error::malformed("E-AC-3: could not build ec-3 sample entry"))?;
+    let info = StreamInfo {
+        kind: MediaKind::Audio,
+        codec: Codec::Eac3,
+        timescale: Timescale::MPEG_TS,
+        resolution: None,
+        sample_rate: Some(header.sample_rate),
+        bitrate: None,
+        codec_string: Some(eac3_codec_string()),
+    };
+    Ok(ElementaryTrack { info, samples, sample_entry })
+}
+
+/// Build an MP3 (MPEG-1/2 Audio Layer III) track from a raw elementary stream.
+pub fn mp3(data: &[u8]) -> Result<ElementaryTrack> {
+    let header =
+        mp3_first_header(data).ok_or_else(|| Error::malformed("MP3: no valid frame found"))?;
+    let samples = mp3_frames(data);
+    let Some(first) = samples.first() else {
+        return Err(Error::malformed("MP3: no frames found"));
+    };
+    let sample_entry = mp3_sample_entry(&first.data)
+        .ok_or_else(|| Error::malformed("MP3: could not build mp4a sample entry"))?;
+    let info = StreamInfo {
+        kind: MediaKind::Audio,
+        codec: Codec::Mp3,
+        timescale: Timescale::MPEG_TS,
+        resolution: None,
+        sample_rate: Some(header.sample_rate),
+        bitrate: None,
+        codec_string: mp3_codec_string(&first.data),
+    };
+    Ok(ElementaryTrack { info, samples, sample_entry })
+}
+
+/// Build a FLAC track from a native (`fLaC`) elementary stream.
+pub fn flac(data: &[u8]) -> Result<ElementaryTrack> {
+    let (si, _) = crate::flac::stream_info(data)
+        .ok_or_else(|| Error::malformed("FLAC: missing or invalid STREAMINFO"))?;
+    let samples = crate::flac::frames(data);
+    if samples.is_empty() {
+        return Err(Error::malformed("FLAC: no audio frames found"));
+    }
+    let sample_entry = flac_sample_entry(data)
+        .ok_or_else(|| Error::malformed("FLAC: could not build fLaC sample entry"))?;
+    let info = StreamInfo {
+        kind: MediaKind::Audio,
+        codec: Codec::Flac,
+        timescale: Timescale::MPEG_TS,
+        resolution: None,
+        sample_rate: Some(si.sample_rate),
+        bitrate: None,
+        codec_string: Some(flac_codec_string()),
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }

@@ -16,11 +16,15 @@ built and validated against it as the reference oracle.
 
 📖 **Read the story:** [Packaging the World's Video in Pure Rust](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
 
-> Status: **working VOD pipeline + encryption.** `probe` and `package` demux MP4
-> and MPEG-TS and write playable CMAF segments + DASH/HLS manifests with correct
-> codec strings, plus all four CENC schemes (`cenc`/`cens`/`cbc1`/`cbcs`) with
-> multi-DRM `pssh` and key rotation. The path to full Shaka Packager parity (more
-> inputs, live) is tracked in [`ROADMAP.md`](./ROADMAP.md).
+> Status: **working VOD pipeline + encryption + a broad input matrix.** `probe`
+> and `package` demux MP4, MPEG-TS, raw elementary streams, and WebM/Matroska,
+> then write playable CMAF segments + DASH/HLS manifests with correct codec
+> strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3, E-AC-3, MP3,
+> FLAC, Opus. Text: WebVTT, plus CEA-608 caption extraction from H.264/H.265 SEI.
+> Encryption covers all four CENC schemes (`cenc`/`cens`/`cbc1`/`cbcs`) with
+> multi-DRM `pssh` and key rotation. The path to full Shaka Packager parity (the
+> last codec/format gaps, real-corpus oracle diffs, live) is tracked in
+> [`ROADMAP.md`](./ROADMAP.md).
 
 ## Why
 
@@ -34,8 +38,10 @@ segment → DASH/HLS manifests, with no C/C++ dependencies.
 | ------- | ------ | ------------------------- |
 | [`sheathe-core`](crates/sheathe-core)     | Media model: streams, samples, timing, errors | `media/base` |
 | [`sheathe-mp4`](crates/sheathe-mp4)       | ISO-BMFF / fMP4 / CMAF box writing + fragmentation | `media/formats/mp4` + chunking |
-| [`sheathe-ts`](crates/sheathe-ts)         | MPEG-2 transport stream demux (PAT/PMT/PES) | `media/formats/mpeg` |
-| [`sheathe-es`](crates/sheathe-es)         | Raw elementary stream demux (Annex B, ADTS) | `media/formats` |
+| [`sheathe-ts`](crates/sheathe-ts)         | MPEG-2 TS demux (PAT/PMT/PES) + audio codec parsers (AAC/AC-3/E-AC-3/MP3/FLAC) | `media/formats/mpeg` |
+| [`sheathe-es`](crates/sheathe-es)         | Raw elementary stream demux (Annex B, ADTS, AC-3/E-AC-3, MP3, FLAC) | `media/formats` |
+| [`sheathe-mkv`](crates/sheathe-mkv)       | WebM/Matroska (EBML) demux — VP8/VP9/AV1 + Opus | `media/formats/webm` |
+| [`sheathe-text`](crates/sheathe-text)     | Timed text: WebVTT input + CEA-608 caption extraction → `wvtt` | `media/formats/webvtt` |
 | [`sheathe-dash`](crates/sheathe-dash)     | MPEG-DASH `.mpd` generation | `mpd` |
 | [`sheathe-hls`](crates/sheathe-hls)       | HLS master + media playlist generation | `hls` |
 | [`sheathe-crypto`](crates/sheathe-crypto) | Common Encryption (cenc / cbcs) | `media/crypto` |
@@ -55,10 +61,12 @@ cargo run -p sheathe -- --help
 # Package an MP4 into 6s CMAF segments with both DASH and HLS manifests.
 sheathe package input.mp4 --out site/ --segment-duration 6 --dash --hls
 
-# Inspect what sheathe detects in a file (MP4 or MPEG-TS).
+# Inspect what sheathe detects (MP4, MPEG-TS, WebM, raw ES, WebVTT).
 sheathe probe input.mp4
 sheathe probe input.ts
-sheathe package input.h264 input.aac --out site/ --dash --hls
+sheathe probe input.webm
+sheathe package input.h264 input.ac3 --out site/ --dash --hls   # CEA-608 auto-extracted
+sheathe package input.webm subtitles.vtt --out site/ --dash
 
 # Differential-test against Shaka Packager (when `packager` is on PATH).
 just oracle input.mp4

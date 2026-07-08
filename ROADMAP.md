@@ -88,14 +88,27 @@ servers (an external-service dependency, see below).
   extraction, `avc1`/`hvc1`/`mp4a` sample-entry synthesis; wired into `probe` and
   `package`. Hermetic synthetic-TS integration tests. Oracle diff on a real TS
   corpus still open.
-- ⬜ WebM/Matroska demux (VP8/VP9/AV1/Opus/Vorbis).
+- 🟡 WebM/Matroska demux (VP8/VP9/AV1/Opus/Vorbis). `sheathe-mkv`: EBML reader,
+  Segment/Info/Tracks/Cluster + SimpleBlock/BlockGroup extraction; VP8/VP9/AV1
+  video + Opus audio with `vp08`/`vp09`/`av01`/`Opus` sample-entry synthesis;
+  wired into `probe`/`package`. Vorbis, Xiph/EBML lacing, and bitstream-accurate
+  `vpcC`/`av01` codec strings still open; oracle diff on a real corpus open.
 - 🟡 Raw elementary stream inputs (H.264/H.265 Annex B, AAC-ADTS, AC-3).
   `sheathe-es`: extension + content sniffing, Annex B access-unit splitting,
-  ADTS-AAC frame extraction; wired into `probe` and `package`. AC-3 and oracle
-  diff still open.
-- ⬜ Audio: AC-3 / E-AC-3, Opus, FLAC, MP3 sample entries + codec strings.
-- ⬜ Text passthrough: WebVTT / TTML (IMSC) segmented output.
-- ⬜ Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
+  ADTS-AAC and AC-3 syncframe extraction; wired into `probe` and `package`.
+  Oracle diff on a real corpus still open.
+- 🟡 Audio: **AC-3** (`ac-3`/`dac3`), **E-AC-3** (`ec-3`/`dec3`), **MP3**
+  (`mp4a` OTI `0x6B`/`0x69`), and **FLAC** (`fLaC`/`dfLa`) done — parsers +
+  sample-entry synthesis + codec strings, all ffprobe-verified. **Opus**
+  (`Opus`/`dOps`, built from `OpusHead`) done via `sheathe-mkv`, ffprobe-verified.
+- 🟡 Text passthrough: WebVTT / TTML (IMSC) segmented output. `sheathe-text`:
+  **WebVTT** done — `.vtt` → gapless ISO 14496-30 `wvtt` samples (`vttc`/`sttg`/
+  `payl`/`vtte`) + `wvtt`/`vttC` entry, wired into `probe`/`package` with a DASH
+  text AdaptationSet. **TTML/IMSC** (`stpp`) still open.
+- 🟡 Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
+  **CEA-608** done — `GA94` SEI `cc_data` (field 1) → pop-on/roll-up decode →
+  auto-appended `wvtt` text track in `probe`/`package`. CEA-708 DTVCC service
+  decoding and field-2 608 still open.
 
 ## Phase 4 — Live & advanced manifests ⬜
 
@@ -133,8 +146,15 @@ and ffmpeg decrypt+decode verified. The only Phase 2 item left is live network
 key servers, deferred as an external-service dependency that can't be
 oracle-verified in a hermetic setup.
 
-**Current focus: Phase 3** — complete the full inputs & codecs phase before
-releasing **0.3** (no partial milestone releases). MPEG-TS demux (`sheathe-ts`) is
-the first deliverable; remaining: oracle-close TS on a real corpus, WebM/Matroska,
-raw elementary streams, additional audio codecs, and WebVTT/TTML text. The Shaka
-oracle harness (`just oracle`) is scaffolded for corpus regression as inputs broaden.
+**Current focus: Phase 3** — the inputs & codecs phase is functionally landed
+across seven crates. Shipped this cycle: MPEG-TS demux (`sheathe-ts`), raw
+elementary streams (`sheathe-es`), the full audio set — **AC-3, E-AC-3, MP3,
+FLAC, Opus** — plus the **WebM/Matroska** demuxer (`sheathe-mkv`, VP8/VP9/AV1 +
+Opus), **WebVTT** text (`sheathe-text`), and **CEA-608** caption extraction.
+Every codec is ffprobe-verified through `probe`/`package`.
+
+Remaining before **0.3** (no partial milestone releases): a real-corpus oracle
+diff vs Shaka Packager across the new inputs; the last codec/format gaps —
+Vorbis in WebM, bitstream-accurate `vpcC`/`av01` codec strings, WebM lacing
+variants, **TTML/IMSC** (`stpp`) text, and **CEA-708** DTVCC. The Shaka oracle
+harness (`just oracle`) is scaffolded for corpus regression as inputs broaden.

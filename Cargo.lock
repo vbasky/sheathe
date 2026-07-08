@@ -544,7 +544,9 @@ dependencies = [
  "sheathe-dash",
  "sheathe-es",
  "sheathe-hls",
+ "sheathe-mkv",
  "sheathe-mp4",
+ "sheathe-text",
  "sheathe-ts",
 ]
 
@@ -586,11 +588,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "sheathe-mkv"
+version = "0.2.0"
+dependencies = [
+ "sheathe-core",
+]
+
+[[package]]
 name = "sheathe-mp4"
 version = "0.2.0"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
+]
+
+[[package]]
+name = "sheathe-text"
+version = "0.2.0"
+dependencies = [
+ "sheathe-core",
 ]
 
 [[package]]

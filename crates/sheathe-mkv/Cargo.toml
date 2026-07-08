@@ -1,0 +1,18 @@
+[package]
+name = "sheathe-mkv"
+version = "0.2.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "WebM/Matroska (EBML) demuxer for the sheathe packager"
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+
+[dependencies]
+sheathe-core.workspace = true
+
+[lints]
+workspace = true

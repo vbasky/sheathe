@@ -8,12 +8,20 @@ pub mod elementary;
 pub mod packet;
 
 mod aac_entry;
+mod ac3;
+mod ac3_entry;
 mod adts;
 mod annexb;
 mod avcc;
 mod bitstream;
 mod demux;
+mod eac3;
+mod eac3_entry;
+mod flac;
+mod flac_entry;
 mod hvcc;
+mod mp3;
+mod mp3_entry;
 mod pes;
 mod psi;
 

@@ -11,6 +11,14 @@ use std::collections::HashMap;
 const STREAM_TYPE_AVC: u8 = 0x1b;
 const STREAM_TYPE_AAC_ADTS: u8 = 0x0f;
 const STREAM_TYPE_HEVC: u8 = 0x24;
+/// ATSC A/52 AC-3 audio (ATSC A/53; DVB signals it via a registration descriptor).
+const STREAM_TYPE_AC3: u8 = 0x81;
+/// ATSC Enhanced AC-3 (E-AC-3) audio.
+const STREAM_TYPE_EAC3: u8 = 0x87;
+/// MPEG-1 audio (Layer III / MP3).
+const STREAM_TYPE_MPEG1_AUDIO: u8 = 0x03;
+/// MPEG-2 audio (Layer III / MP3).
+const STREAM_TYPE_MPEG2_AUDIO: u8 = 0x04;
 
 #[derive(Debug, Default)]
 struct PesBuffer {
@@ -144,6 +152,9 @@ fn build_track(
     let elementary = match stream_type {
         STREAM_TYPE_AVC => elementary::h264_from_annex_b(all_data, pes_payloads)?,
         STREAM_TYPE_AAC_ADTS => elementary::aac_adts(all_data)?,
+        STREAM_TYPE_AC3 => elementary::ac3(all_data)?,
+        STREAM_TYPE_EAC3 => elementary::eac3(all_data)?,
+        STREAM_TYPE_MPEG1_AUDIO | STREAM_TYPE_MPEG2_AUDIO => elementary::mp3(all_data)?,
         STREAM_TYPE_HEVC => elementary::hevc_from_annex_b(all_data, pes_payloads)?,
         other => {
             return Err(Error::unsupported(format!(

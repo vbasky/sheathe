@@ -16,6 +16,10 @@ impl EsDemuxer {
             StreamKind::H264AnnexB => elementary::h264_from_annex_b(data, &[])?,
             StreamKind::HevcAnnexB => elementary::hevc_from_annex_b(data, &[])?,
             StreamKind::AacAdts => elementary::aac_adts(data)?,
+            StreamKind::Ac3 => elementary::ac3(data)?,
+            StreamKind::Eac3 => elementary::eac3(data)?,
+            StreamKind::Mp3 => elementary::mp3(data)?,
+            StreamKind::Flac => elementary::flac(data)?,
         };
         Ok(Self { track })
     }

@@ -11,6 +11,14 @@ pub enum StreamKind {
     HevcAnnexB,
     /// AAC with ADTS headers (`.aac`, `.adts`).
     AacAdts,
+    /// AC-3 / Dolby Digital (`.ac3`).
+    Ac3,
+    /// Enhanced AC-3 / Dolby Digital Plus (`.eac3`, `.ec3`).
+    Eac3,
+    /// MPEG-1/2 Audio Layer III (`.mp3`).
+    Mp3,
+    /// Native FLAC (`.flac`).
+    Flac,
 }
 
 /// Guess stream kind from `path` and the first bytes of `data`.
@@ -29,6 +37,10 @@ fn extension_kind(path: &str) -> Option<StreamKind> {
         "h264" | "264" | "avc" => Some(StreamKind::H264AnnexB),
         "hevc" | "h265" | "265" => Some(StreamKind::HevcAnnexB),
         "aac" | "adts" => Some(StreamKind::AacAdts),
+        "ac3" => Some(StreamKind::Ac3),
+        "eac3" | "ec3" => Some(StreamKind::Eac3),
+        "mp3" => Some(StreamKind::Mp3),
+        "flac" => Some(StreamKind::Flac),
         _ => None,
     }
 }
@@ -36,6 +48,15 @@ fn extension_kind(path: &str) -> Option<StreamKind> {
 fn sniff_content(data: &[u8]) -> Option<StreamKind> {
     if is_adts(data) {
         return Some(StreamKind::AacAdts);
+    }
+    if let Some(kind) = sniff_ac3(data) {
+        return Some(kind);
+    }
+    if is_flac(data) {
+        return Some(StreamKind::Flac);
+    }
+    if is_mp3(data) {
+        return Some(StreamKind::Mp3);
     }
     if !looks_like_annex_b(data) {
         return None;
@@ -51,6 +72,32 @@ fn sniff_content(data: &[u8]) -> Option<StreamKind> {
 
 fn is_adts(data: &[u8]) -> bool {
     data.len() >= 2 && data[0] == 0xff && (data[1] & 0xf0) == 0xf0
+}
+
+/// Sniff an AC-3 / E-AC-3 syncframe. Both share the `0x0B77` syncword and carry
+/// `bsid` at bit offset 40 (byte 5, top 5 bits); `bsid == 16` marks E-AC-3.
+fn sniff_ac3(data: &[u8]) -> Option<StreamKind> {
+    if data.len() < 6 || data[0] != 0x0b || data[1] != 0x77 {
+        return None;
+    }
+    if data[5] >> 3 == 16 { Some(StreamKind::Eac3) } else { Some(StreamKind::Ac3) }
+}
+
+fn is_flac(data: &[u8]) -> bool {
+    data.len() >= 4 && &data[0..4] == b"fLaC"
+}
+
+/// MP3: an `ID3` tag, or an MPEG-1/2 Layer III frame sync. The Layer-III + valid
+/// version check keeps it from matching ADTS-AAC (`0xFFFx`, layer bits `00`).
+fn is_mp3(data: &[u8]) -> bool {
+    if data.len() >= 3 && &data[0..3] == b"ID3" {
+        return true;
+    }
+    data.len() >= 2
+        && data[0] == 0xff
+        && (data[1] & 0xe0) == 0xe0
+        && (data[1] >> 1) & 0x03 == 0x01 // Layer III
+        && (data[1] >> 3) & 0x03 != 0x01 // version not reserved
 }
 
 fn looks_like_annex_b(data: &[u8]) -> bool {

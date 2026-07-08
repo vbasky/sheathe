@@ -174,9 +174,61 @@ fn is_transport_stream(data: &[u8]) -> bool {
     (0..3).all(|i| data[i * PACKET_SIZE] == 0x47)
 }
 
+/// Extract CEA-608 captions from an Annex B H.264/H.265 video track and append
+/// them as a WebVTT text track. A no-op when no captions are present.
+fn append_captions(tracks: &mut Vec<LoadedTrack>) {
+    let Some(vid) = tracks.iter().find(|t| {
+        t.track.info.kind == sheathe_core::MediaKind::Video
+            && matches!(t.track.info.codec, sheathe_core::Codec::H264 | sheathe_core::Codec::H265)
+    }) else {
+        return;
+    };
+    let hevc = vid.track.info.codec == sheathe_core::Codec::H265;
+    let samples: Vec<(u64, &[u8])> =
+        vid.samples.iter().map(|s| (s.pts, s.data.as_slice())).collect();
+    let Some(text) = sheathe_text::extract_cea608(&samples, hevc) else {
+        return;
+    };
+    let id = tracks.len() as u32 + 1;
+    tracks.push(LoadedTrack {
+        track: Track::from_sample_entry(
+            text.info.clone(),
+            id,
+            text.sample_entry.clone(),
+            &text.samples,
+        ),
+        samples: text.samples.clone(),
+    });
+}
+
 fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
     if is_transport_stream(data) {
         let demux = TsDemuxer::parse(data).with_context(|| format!("parsing MPEG-TS {path}"))?;
+        let mut tracks: Vec<LoadedTrack> = demux
+            .tracks()
+            .iter()
+            .enumerate()
+            .map(|(i, t)| LoadedTrack {
+                track: Track::from_sample_entry(
+                    t.info.clone(),
+                    (i + 1) as u32,
+                    t.sample_entry.clone(),
+                    &t.samples,
+                ),
+                samples: t.samples.clone(),
+            })
+            .collect();
+        append_captions(&mut tracks);
+        return Ok(LoadedInput { format: "MPEG-TS", tracks });
+    }
+
+    if is_mp4(data) {
+        return load_mp4(path, data);
+    }
+
+    if sheathe_mkv::is_webm(data) {
+        let demux =
+            sheathe_mkv::MkvDemuxer::parse(data).with_context(|| format!("parsing WebM {path}"))?;
         let tracks = demux
             .tracks()
             .iter()
@@ -191,21 +243,29 @@ fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
                 samples: t.samples.clone(),
             })
             .collect();
-        return Ok(LoadedInput { format: "MPEG-TS", tracks });
+        return Ok(LoadedInput { format: "WebM", tracks });
     }
 
-    if is_mp4(data) {
-        return load_mp4(path, data);
+    if sheathe_text::is_webvtt(path, data) {
+        let text = std::str::from_utf8(data)
+            .with_context(|| format!("WebVTT {path} is not valid UTF-8"))?;
+        let t = sheathe_text::webvtt(text).with_context(|| format!("parsing WebVTT {path}"))?;
+        let tracks = vec![LoadedTrack {
+            track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
+            samples: t.samples.clone(),
+        }];
+        return Ok(LoadedInput { format: "WebVTT", tracks });
     }
 
     if sheathe_es::detect(path, data).is_some() {
         let demux = EsDemuxer::parse_auto(path, data)
             .with_context(|| format!("parsing elementary stream {path}"))?;
         let t = demux.track();
-        let tracks = vec![LoadedTrack {
+        let mut tracks = vec![LoadedTrack {
             track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
             samples: t.samples.clone(),
         }];
+        append_captions(&mut tracks);
         return Ok(LoadedInput { format: "elementary", tracks });
     }
 

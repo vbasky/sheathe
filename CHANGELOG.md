@@ -7,9 +7,51 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
-- **`sheathe-es`** — raw elementary stream demuxer (Phase 3): Annex B H.264/HEVC
-  and ADTS-AAC inputs (`.h264`, `.hevc`, `.aac`, …) with access-unit / frame
-  splitting; wired into `probe` and `package`.
+
+- **CEA-608 caption extraction** (Phase 3): pulls `cc_data` (field 1) from
+  H.264/H.265 `user_data_registered_itu_t_t35` (`GA94`) SEI messages and decodes
+  the pop-on / roll-up paths (basic + special North-American character sets) to
+  WebVTT cues. `package`/`probe` auto-append the captions as a `wvtt` text track
+  when an Annex B H.264/H.265 input carries them. CEA-708 DTVCC service decoding
+  is not yet implemented (those packets are skipped).
+- **`sheathe-text`** — WebVTT input (Phase 3): parses `.vtt` documents (cue
+  identifiers, `HH:MM:SS.mmm` timing, cue settings) into a gapless ISO/IEC
+  14496-30 sample timeline (`vttc`/`sttg`/`payl` cue boxes, `vtte` for gaps)
+  with a `wvtt`/`vttC` sample entry. Wired into `probe`/`package`; DASH emits a
+  `contentType="text"` AdaptationSet with `codecs="wvtt"`.
+- **`sheathe-mkv`** — WebM/Matroska (EBML) demuxer (Phase 3): a var-int EBML
+  reader, Segment/Info/Tracks/Cluster walking, and SimpleBlock/BlockGroup sample
+  extraction (no + fixed lacing) with cluster-timestamp → 90 kHz conversion.
+  Supports **VP8/VP9/AV1** video and **Opus** audio, synthesising `vp08`/`vp09`
+  (+`vpcC`) / `av01` (+`av1C` from `CodecPrivate`) / `Opus` (+`dOps` from
+  `OpusHead`) sample entries and RFC 6381 codec strings. Wired into `probe` and
+  `package` (EBML-magic detection); ffprobe reads the Opus output as `opus`,
+  48 kHz, correct channels.
+- **E-AC-3 (Dolby Digital Plus) input** (Phase 3): ETSI TS 102 366 Annex E
+  syncframe parser (`strmtyp`/`frmsiz`/`fscod`/`numblkscod`/`acmod`/`lfeon`,
+  `bsid == 16`, dependent-substream folding) with `ec-3` AudioSampleEntry +
+  `dec3` (EC3SpecificBox) synthesis and the `ec-3` codec string. AC-3 vs E-AC-3
+  is disambiguated by `bsid`. Wired into `sheathe-es` (`.eac3`/`.ec3`) and the
+  MPEG-TS demuxer (stream type `0x87`). ffprobe reads the output as `eac3`,
+  48 kHz, 5.1.
+- **MP3 (MPEG-1/2 Audio Layer III) input** (Phase 3): frame-header parser
+  (Layer III, all three sample-rate families, ID3v2 skip) with an `mp4a`
+  AudioSampleEntry carrying an `esds` (OTI `0x6B`/`0x69`, no ASC) and the
+  `mp4a.6b`/`mp4a.69` codec string. `.mp3` inputs + MPEG-TS stream types
+  `0x03`/`0x04`. ffprobe reads the output as `mp3`.
+- **FLAC (native `fLaC`) input** (Phase 3): STREAMINFO parsing with `fLaC`
+  AudioSampleEntry + `dfLa` (FLACSpecificBox) synthesis and the `fLaC` codec
+  string; sync-scanning frame splitter (fixed-block-size streams). `.flac`
+  inputs + `fLaC` content sniff.
+- **AC-3 (Dolby Digital) input** (Phase 3): ATSC A/52 syncframe parser
+  (`0x0B77`, `fscod`/`frmsizecod`/`bsid`/`bsmod`/`acmod`/`lfeon`, A/52 Table 5.18
+  frame sizing) with `ac-3` AudioSampleEntry + `dac3` box synthesis and the
+  `ac-3` RFC 6381 codec string. Wired into `sheathe-es` (`.ac3`/`.eac3`/`.ec3` +
+  `0x0B77` content sniff) and the MPEG-TS demuxer (stream type `0x81`). ffprobe
+  reads the synthesised track as `ac-3`, 48 kHz, correct channel count.
+- **`sheathe-es`** — raw elementary stream demuxer (Phase 3): Annex B H.264/HEVC,
+  ADTS-AAC, and AC-3 inputs (`.h264`, `.hevc`, `.aac`, `.ac3`, …) with access-unit
+  / frame splitting; wired into `probe` and `package`.
 - **`sheathe-ts`** — MPEG-2 transport stream demuxer (Phase 3): PAT/PMT/PES
   parsing, H.264 + HEVC Annex B and ADTS-AAC sample extraction, `avc1`/`hvc1`/`mp4a`
   sample-entry synthesis from elementary stream headers. `probe` and `package`
