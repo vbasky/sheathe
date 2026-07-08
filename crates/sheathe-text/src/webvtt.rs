@@ -54,6 +54,24 @@ pub fn webvtt(text: &str) -> Result<TextTrack> {
     Ok(TextTrack { info, samples, sample_entry: wvtt_sample_entry("WEBVTT") })
 }
 
+/// Render decoded caption cues `(start_ms, end_ms, text)` into a WebVTT
+/// document — shared by the CEA-608/708 caption decoders.
+pub(crate) fn render_cues(cues: &[(u64, u64, String)]) -> String {
+    let mut out = String::from("WEBVTT\n");
+    for (start, end, text) in cues {
+        out.push_str(&format!("\n{} --> {}\n{}\n", fmt_ts(*start), fmt_ts(*end), text));
+    }
+    out
+}
+
+/// Format milliseconds as WebVTT `HH:MM:SS.mmm`.
+pub(crate) fn fmt_ts(ms: u64) -> String {
+    let h = ms / 3_600_000;
+    let m = (ms % 3_600_000) / 60_000;
+    let s = (ms % 60_000) / 1000;
+    format!("{h:02}:{m:02}:{s:02}.{:03}", ms % 1000)
+}
+
 /// A text sample spanning `[start_ms, end_ms)` at 90 kHz, carrying `body` bytes.
 fn text_sample(start_ms: u64, end_ms: u64, body: Vec<u8>) -> Sample {
     let pts = start_ms * 90;

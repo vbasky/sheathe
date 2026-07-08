@@ -8,12 +8,17 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ### Added
 
-- **CEA-608 caption extraction** (Phase 3): pulls `cc_data` (field 1) from
-  H.264/H.265 `user_data_registered_itu_t_t35` (`GA94`) SEI messages and decodes
-  the pop-on / roll-up paths (basic + special North-American character sets) to
-  WebVTT cues. `package`/`probe` auto-append the captions as a `wvtt` text track
-  when an Annex B H.264/H.265 input carries them. CEA-708 DTVCC service decoding
-  is not yet implemented (those packets are skipped).
+- **CEA-608 + CEA-708 caption extraction** (Phase 3): pulls `cc_data` from
+  H.264/H.265 `user_data_registered_itu_t_t35` (`GA94`) SEI messages (shared
+  `sei` extractor) and decodes every caption source to WebVTT:
+  - **CEA-608** — both field 1 (CC1) and field 2 (CC3), pop-on / roll-up paths,
+    basic + special North-American character sets.
+  - **CEA-708** — DTVCC packet reassembly, service-block demux, a C0/C1/G0/G1
+    code-space interpreter with correct command-length skipping, and an 8-window
+    model (define/display/hide/toggle/clear/delete + text) → one track per service.
+
+  `package`/`probe` auto-append each detected caption source as its own `wvtt`
+  text track when an Annex B H.264/H.265 input carries captions.
 - **`sheathe-text`** — WebVTT input (Phase 3): parses `.vtt` documents (cue
   identifiers, `HH:MM:SS.mmm` timing, cue settings) into a gapless ISO/IEC
   14496-30 sample timeline (`vttc`/`sttg`/`payl` cue boxes, `vtte` for gaps)

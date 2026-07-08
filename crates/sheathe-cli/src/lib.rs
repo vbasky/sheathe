@@ -186,19 +186,18 @@ fn append_captions(tracks: &mut Vec<LoadedTrack>) {
     let hevc = vid.track.info.codec == sheathe_core::Codec::H265;
     let samples: Vec<(u64, &[u8])> =
         vid.samples.iter().map(|s| (s.pts, s.data.as_slice())).collect();
-    let Some(text) = sheathe_text::extract_cea608(&samples, hevc) else {
-        return;
-    };
-    let id = tracks.len() as u32 + 1;
-    tracks.push(LoadedTrack {
-        track: Track::from_sample_entry(
-            text.info.clone(),
-            id,
-            text.sample_entry.clone(),
-            &text.samples,
-        ),
-        samples: text.samples.clone(),
-    });
+    for text in sheathe_text::extract_captions(&samples, hevc) {
+        let id = tracks.len() as u32 + 1;
+        tracks.push(LoadedTrack {
+            track: Track::from_sample_entry(
+                text.info.clone(),
+                id,
+                text.sample_entry.clone(),
+                &text.samples,
+            ),
+            samples: text.samples.clone(),
+        });
+    }
 }
 
 fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {

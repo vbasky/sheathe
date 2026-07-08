@@ -106,9 +106,11 @@ servers (an external-service dependency, see below).
   `payl`/`vtte`) + `wvtt`/`vttC` entry, wired into `probe`/`package` with a DASH
   text AdaptationSet. **TTML/IMSC** (`stpp`) still open.
 - 🟡 Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
-  **CEA-608** done — `GA94` SEI `cc_data` (field 1) → pop-on/roll-up decode →
-  auto-appended `wvtt` text track in `probe`/`package`. CEA-708 DTVCC service
-  decoding and field-2 608 still open.
+  **CEA-608** (field 1 + field 2, pop-on/roll-up) and **CEA-708** (DTVCC packet
+  reassembly, service blocks, C0/C1/G0/G1 + 8-window model) both decode `GA94`
+  SEI `cc_data` to WebVTT, auto-appended as one `wvtt` track per source in
+  `probe`/`package`. Remaining: pen/window *styling* (positioning, colour) is
+  length-skipped not rendered; real-corpus oracle diff still open.
 
 ## Phase 4 — Live & advanced manifests ⬜
 
@@ -153,8 +155,10 @@ FLAC, Opus** — plus the **WebM/Matroska** demuxer (`sheathe-mkv`, VP8/VP9/AV1 
 Opus), **WebVTT** text (`sheathe-text`), and **CEA-608** caption extraction.
 Every codec is ffprobe-verified through `probe`/`package`.
 
-Remaining before **0.3** (no partial milestone releases): a real-corpus oracle
-diff vs Shaka Packager across the new inputs; the last codec/format gaps —
-Vorbis in WebM, bitstream-accurate `vpcC`/`av01` codec strings, WebM lacing
-variants, **TTML/IMSC** (`stpp`) text, and **CEA-708** DTVCC. The Shaka oracle
-harness (`just oracle`) is scaffolded for corpus regression as inputs broaden.
+Captions now cover **CEA-608 (fields 1+2) and CEA-708 (DTVCC)**, decoded to
+`wvtt` tracks. Remaining before **0.3** (no partial milestone releases): a
+real-corpus oracle diff vs Shaka Packager across the new inputs; the last
+codec/format gaps — Vorbis in WebM, bitstream-accurate `vpcC`/`av01` codec
+strings, WebM lacing variants, **TTML/IMSC** (`stpp`) text, and caption
+*styling* (708 pen/window colour & positioning). The Shaka oracle harness
+(`just oracle`) is scaffolded for corpus regression as inputs broaden.
