@@ -231,7 +231,7 @@ fn stpp_sample_entry() -> Vec<u8> {
 fn extract_attr<'a>(s: &'a str, key: &str) -> Option<&'a str> {
     let start = s.find(key)?;
     let val_start = start + key.len();
-    let end = s[val_start..].find(|c| c == '"' || c == '>')?;
+    let end = s[val_start..].find(['"', '>'])?;
     Some(&s[val_start..val_start + end])
 }
 

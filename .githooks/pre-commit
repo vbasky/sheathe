@@ -3,6 +3,11 @@ set -euo pipefail
 
 cargo fmt --all --check 2>/dev/null || {
   cargo fmt --all
-  echo "→ cargo fmt: applied formatting changes (staging them)"
+  echo "→ cargo fmt: applied formatting (staging them)"
   git add -u
+}
+
+cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null || {
+  echo "✗ cargo clippy: fix the warnings above and commit again"
+  exit 1
 }

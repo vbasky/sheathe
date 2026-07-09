@@ -585,7 +585,7 @@ mod tests {
             // Slice first (VCL trigger for AU partitioner), then SEI.
             // This order ensures the partitioner assigns SEI to its own AU.
             out.extend_from_slice(&[0, 0, 0, 1]);
-            out.extend_from_slice(&slice);
+            out.extend_from_slice(slice);
             let sei = build_packet(frame, captions[frame % captions.len()]);
             let sei_slice = sei.as_slice();
             out.extend_from_slice(&[0, 0, 0, 1]);
