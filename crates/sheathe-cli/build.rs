@@ -12,29 +12,45 @@ const CLI_LOGO_PX: u32 = 256;
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
-    let svg_path = manifest_dir.join("../../docs/banner.svg");
-    let svg = fs::read_to_string(&svg_path).unwrap_or_else(|e| {
-        panic!("reading {}: {e}", svg_path.display());
-    });
-
-    let marker = "href=\"data:image/png;base64,";
-    let start = svg.find(marker).unwrap_or_else(|| panic!("embedded logo not found in banner.svg"))
-        + marker.len();
-    let end = start + svg[start..].find('"').expect("unterminated base64 in banner.svg");
-    let png = decode_base64(&svg[start..end]).expect("invalid logo base64 in banner.svg");
-
-    let img = load_from_memory(&png).expect("decoding embedded logo png");
-    let rgba =
-        imageops::resize(&img.to_rgba8(), CLI_LOGO_PX, CLI_LOGO_PX, imageops::FilterType::Triangle);
-
-    let mut out_png = Vec::new();
-    PngEncoder::new(&mut out_png)
-        .write_image(rgba.as_raw(), CLI_LOGO_PX, CLI_LOGO_PX, ColorType::Rgba8.into())
-        .expect("encoding cli logo png");
-
     let logo_path = out_dir.join("logo.png");
-    fs::write(&logo_path, &out_png).expect("writing OUT_DIR/logo.png");
-    println!("cargo:rerun-if-changed={}", svg_path.display());
+    let svg_path = manifest_dir.join("../../docs/banner.svg");
+
+    // The canonical source is docs/banner.svg (workspace root). Published crate
+    // tarballs don't include files outside the crate directory, so a packaged
+    // build won't find the SVG — fall back to the committed assets/logo.png
+    // (regenerated from the SVG whenever it *is* present, e.g. dev builds).
+    if svg_path.exists() {
+        let svg = fs::read_to_string(&svg_path).unwrap_or_else(|e| {
+            panic!("reading {}: {e}", svg_path.display());
+        });
+
+        let marker = "href=\"data:image/png;base64,";
+        let start =
+            svg.find(marker).unwrap_or_else(|| panic!("embedded logo not found in banner.svg"))
+                + marker.len();
+        let end = start + svg[start..].find('"').expect("unterminated base64 in banner.svg");
+        let png = decode_base64(&svg[start..end]).expect("invalid logo base64 in banner.svg");
+
+        let img = load_from_memory(&png).expect("decoding embedded logo png");
+        let rgba = imageops::resize(
+            &img.to_rgba8(),
+            CLI_LOGO_PX,
+            CLI_LOGO_PX,
+            imageops::FilterType::Triangle,
+        );
+
+        let mut out_png = Vec::new();
+        PngEncoder::new(&mut out_png)
+            .write_image(rgba.as_raw(), CLI_LOGO_PX, CLI_LOGO_PX, ColorType::Rgba8.into())
+            .expect("encoding cli logo png");
+
+        fs::write(&logo_path, &out_png).expect("writing OUT_DIR/logo.png");
+        println!("cargo:rerun-if-changed={}", svg_path.display());
+    } else {
+        let asset = manifest_dir.join("assets/logo.png");
+        fs::copy(&asset, &logo_path).unwrap_or_else(|e| panic!("copying {}: {e}", asset.display()));
+        println!("cargo:rerun-if-changed={}", asset.display());
+    }
 }
 
 fn decode_base64(input: &str) -> Result<Vec<u8>, &'static str> {
