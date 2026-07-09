@@ -71,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "anyhow"
-version = "1.0.102"
+version = "1.0.103"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
+checksum = "2a4385e2e34eb35d6b3efe798b9eb88096925d87726c0798709bf56d9ed84af3"
 
 [[package]]
 name = "autocfg"
@@ -524,7 +524,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sheathe"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "sheathe-cli",
@@ -532,7 +532,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -552,14 +552,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "sheathe-crypto"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "aes",
  "sheathe-core",
@@ -567,14 +567,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-dash"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-es"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
  "sheathe-ts",
@@ -582,21 +582,21 @@ dependencies = [
 
 [[package]]
 name = "sheathe-hls"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mkv"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mp4"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
@@ -604,14 +604,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-text"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-ts"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "sheathe-core",
 ]
