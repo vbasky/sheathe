@@ -11,3 +11,8 @@ cargo clippy --workspace --all-targets -- -D warnings 2>/dev/null || {
   echo "✗ cargo clippy: fix the warnings above and commit again"
   exit 1
 }
+
+RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --document-private-items 2>/dev/null || {
+  echo "✗ cargo doc: fix the doc warnings above and commit again"
+  exit 1
+}

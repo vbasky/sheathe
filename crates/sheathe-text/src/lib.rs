@@ -3,8 +3,8 @@
 //! Three read paths, all producing [`TextTrack`]s of ISO/IEC 14496-30 cue
 //! samples with a `wvtt`/`stpp` sample entry, ready for CMAF segmentation:
 //!
-//! - [`webvtt`] — parse a `.vtt` document.
-//! - [`ttml`] — passthrough a TTML/IMSC document (`stpp` sample entry).
+//! - [`webvtt()`] — parse a `.vtt` document.
+//! - [`ttml()`] — passthrough a TTML/IMSC document (`stpp` sample entry).
 //! - [`extract_captions`] — recover CEA-608 (field 1 & 2) and CEA-708 (DTVCC)
 //!   closed captions from H.264/H.265 SEI and decode them to WebVTT.
 
