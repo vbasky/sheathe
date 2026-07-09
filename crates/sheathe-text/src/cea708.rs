@@ -134,9 +134,9 @@ struct Window {
     pen_fg: Option<(u8, u8, u8)>,
     /// Background colour, set by SPC.
     pen_bg: Option<(u8, u8, u8)>,
-    /// Italic flag, set by SPA.
+    #[allow(dead_code)]
     italic: bool,
-    /// Underline flag, set by SPA.
+    #[allow(dead_code)]
     underline: bool,
 }
 
