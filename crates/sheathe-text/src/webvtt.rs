@@ -182,10 +182,13 @@ fn vtte_box() -> Vec<u8> {
 pub fn ttml(text: &str) -> Result<TextTrack> {
     let text = text.trim();
     // Skip an optional XML declaration before looking for <tt>.
-    let body = text.strip_prefix("<?xml").and_then(|s| {
-        let end = s.find("?>")?;
-        Some(s[end + 2..].trim_start())
-    }).unwrap_or(text);
+    let body = text
+        .strip_prefix("<?xml")
+        .and_then(|s| {
+            let end = s.find("?>")?;
+            Some(s[end + 2..].trim_start())
+        })
+        .unwrap_or(text);
     if !body.starts_with("<tt") {
         return Err(Error::malformed("TTML: missing '<tt' root element"));
     }
@@ -236,7 +239,8 @@ fn extract_attr<'a>(s: &'a str, key: &str) -> Option<&'a str> {
 fn parse_smpte_dur(s: &str) -> Option<u64> {
     // Support: HH:MM:SS.mmm, HH:MM:SS, MM:SS.mmm, or MM:SS
     let s = s.trim();
-    let (hms, ms) = if let Some((h, m)) = s.split_once('.') { (h, m.parse().ok()?) } else { (s, 0) };
+    let (hms, ms) =
+        if let Some((h, m)) = s.split_once('.') { (h, m.parse().ok()?) } else { (s, 0) };
     let parts: Vec<&str> = hms.split(':').collect();
     let (h, m, sec): (u64, u64, u64) = match parts.as_slice() {
         [h, m, s] => (h.parse().ok()?, m.parse().ok()?, s.parse().ok()?),

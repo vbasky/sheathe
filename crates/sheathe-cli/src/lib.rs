@@ -257,8 +257,8 @@ fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
     }
 
     if sheathe_text::is_ttml(data) {
-        let text = std::str::from_utf8(data)
-            .with_context(|| format!("TTML {path} is not valid UTF-8"))?;
+        let text =
+            std::str::from_utf8(data).with_context(|| format!("TTML {path} is not valid UTF-8"))?;
         let t = sheathe_text::ttml(text).with_context(|| format!("parsing TTML {path}"))?;
         let tracks = vec![LoadedTrack {
             track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),

@@ -317,10 +317,18 @@ impl Service {
                 let font = a2 & 0x07;
                 let sz = a1 >> 6;
                 let mut parts = Vec::new();
-                if italic { parts.push("it".to_string()); }
-                if underline { parts.push("ul".to_string()); }
-                if font != 0 { parts.push(format!("f{}", font)); }
-                if sz != 0 { parts.push(format!("s{}", sz)); }
+                if italic {
+                    parts.push("it".to_string());
+                }
+                if underline {
+                    parts.push("ul".to_string());
+                }
+                if font != 0 {
+                    parts.push(format!("f{}", font));
+                }
+                if sz != 0 {
+                    parts.push(format!("s{}", sz));
+                }
                 if parts.is_empty() { String::new() } else { parts.join("_") }
             }
             None => String::new(),
@@ -329,15 +337,21 @@ impl Service {
         let color_class = if let Some((r, g, b)) = w.pen_fg {
             let name = format!("fg_{r}_{g}_{b}");
             if !self.styles.iter().any(|(k, _)| k == &name) {
-                let css = format!("::cue(.{}) {{ color: rgb({}, {}, {}) }}",
-                    name, r * 85, g * 85, b * 85);
+                let css = format!(
+                    "::cue(.{}) {{ color: rgb({}, {}, {}) }}",
+                    name,
+                    r * 85,
+                    g * 85,
+                    b * 85
+                );
                 self.styles.push((name.clone(), css));
             }
             name
         } else {
             String::new()
         };
-        [&class[..], &color_class[..]].iter()
+        [&class[..], &color_class[..]]
+            .iter()
             .filter(|s| !s.is_empty())
             .cloned()
             .collect::<Vec<_>>()
@@ -404,8 +418,12 @@ mod tests {
         // Packet: [hdr=0x06] [svc=0x2A] [DF0...] [Hi!] [pad to 12]
         let triples = [
             (3, 0x06, 0x2A),
-            (2, 0x98, 0x20), (2, 0x00, 0x00), (2, 0x00, 0x00),
-            (2, 0x00, 0x48), (2, 0x69, 0x21), (2, 0x00, 0x00), // Hi! + pad
+            (2, 0x98, 0x20),
+            (2, 0x00, 0x00),
+            (2, 0x00, 0x00),
+            (2, 0x00, 0x48),
+            (2, 0x69, 0x21),
+            (2, 0x00, 0x00), // Hi! + pad
         ];
         sei_au(&triples)
     }
@@ -417,8 +435,8 @@ mod tests {
         let block = [
             0x8C, 0x01, // DLW window 0
             0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, // DF0 visible
-            b'C', b'E', b'A', b'-', b'7', b'0', b'8', b' ',
-            b'v', b'e', b'r', b'i', b'f', b'i', b'e', b'd', b'.',
+            b'C', b'E', b'A', b'-', b'7', b'0', b'8', b' ', b'v', b'e', b'r', b'i', b'f', b'i',
+            b'e', b'd', b'.',
         ];
         let mut triples = vec![(3u8, 0x0E, 0x3A)];
         for i in (0..block.len()).step_by(2) {
@@ -450,18 +468,17 @@ mod tests {
         let tracks = decode(&triples);
         assert_eq!(tracks.len(), 1, "expected one 708 track");
         let t = &tracks[0];
-        let _vtte_count = t.samples.iter()
-            .filter(|s| s.data.windows(4).any(|w| w == b"vtte"))
-            .count();
-        let payl_count = t.samples.iter()
-            .filter(|s| s.data.windows(4).any(|w| w == b"payl"))
-            .count();
+        let _vtte_count =
+            t.samples.iter().filter(|s| s.data.windows(4).any(|w| w == b"vtte")).count();
+        let payl_count =
+            t.samples.iter().filter(|s| s.data.windows(4).any(|w| w == b"payl")).count();
         assert!(payl_count >= 1, "expected >= 1 payl, got {payl_count}");
         let all_data: Vec<u8> = t.samples.iter().flat_map(|s| s.data.clone()).collect();
-        assert!(all_data.windows(3).any(|w| w == b"Hi!"),
-            "Hi! not found in decoded output");
-        assert!(all_data.windows(8).any(|w| w == b"verified"),
-            "verified not found in decoded output");
+        assert!(all_data.windows(3).any(|w| w == b"Hi!"), "Hi! not found in decoded output");
+        assert!(
+            all_data.windows(8).any(|w| w == b"verified"),
+            "verified not found in decoded output"
+        );
     }
 
     #[test]
@@ -473,15 +490,20 @@ mod tests {
         // Replicate build_packet from generate_708_corpus_asset
         let build_packet = |frame: usize, text: &str| -> Vec<u8> {
             let mut block = Vec::new();
-            if frame > 0 { block.extend_from_slice(&[0x8C, 0x01]); }
+            if frame > 0 {
+                block.extend_from_slice(&[0x8C, 0x01]);
+            }
             block.extend_from_slice(&[0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00]);
             block.extend_from_slice(text.as_bytes());
             let size_code = ((block.len() + 2) / 2).min(63) as u8;
             let svc_hdr = 0x20 | (block.len().min(31) as u8);
             let mut triples = vec![(3u8, size_code, svc_hdr)];
             for i in (0..block.len()).step_by(2) {
-                if i + 1 < block.len() { triples.push((2, block[i], block[i + 1])); }
-                else { triples.push((2, block[i], 0x00)); }
+                if i + 1 < block.len() {
+                    triples.push((2, block[i], block[i + 1]));
+                } else {
+                    triples.push((2, block[i], 0x00));
+                }
             }
             sei_au(&triples)
         };
@@ -515,38 +537,40 @@ mod tests {
             "End-to-end test.",
         ];
 
-        let corpus_file: std::path::PathBuf = [
-            env!("CARGO_MANIFEST_DIR"),
-            "..", "..", "corpus", "media", "bear-708.h264",
-        ].iter().collect();
+        let corpus_file: std::path::PathBuf =
+            [env!("CARGO_MANIFEST_DIR"), "..", "..", "corpus", "media", "bear-708.h264"]
+                .iter()
+                .collect();
 
         // Use known-good SPS (26 bytes) and PPS (5 bytes) from bear.h264
         let sps: &[u8] = &[
-            0x67, 0x64, 0x00, 0x1f, 0xac, 0x34, 0xe5, 0x01,
-            0x40, 0x16, 0xec, 0x04, 0x40, 0x00, 0x00, 0x19,
-            0x00, 0x00, 0x05, 0xda, 0xa3, 0xc6, 0x0c, 0x45,
-            0x80, 0x00,
+            0x67, 0x64, 0x00, 0x1f, 0xac, 0x34, 0xe5, 0x01, 0x40, 0x16, 0xec, 0x04, 0x40, 0x00,
+            0x00, 0x19, 0x00, 0x00, 0x05, 0xda, 0xa3, 0xc6, 0x0c, 0x45, 0x80, 0x00,
         ];
         let pps: &[u8] = &[0x68, 0xee, 0xb2, 0xc8, 0xb0];
         // Slice: an IDR frame (type 5) from bear.h264
         let slice: &[u8] = &[
-            0x65, 0x88, 0x80, 0x20, 0x01, 0xff, 0x98, 0x57,
-            0x23, 0x12, 0x68, 0x17, 0x2f, 0x66, 0x04, 0x50,
-            0xf7, 0x05, 0x5f, 0x79, 0x8b, 0xd1, 0x9e, 0x7f,
-            0x5f, 0x20, 0x6d, 0x53, 0xb5, 0x46,
+            0x65, 0x88, 0x80, 0x20, 0x01, 0xff, 0x98, 0x57, 0x23, 0x12, 0x68, 0x17, 0x2f, 0x66,
+            0x04, 0x50, 0xf7, 0x05, 0x5f, 0x79, 0x8b, 0xd1, 0x9e, 0x7f, 0x5f, 0x20, 0x6d, 0x53,
+            0xb5, 0x46,
         ];
 
         let build_packet = |frame: usize, text: &str| -> Vec<u8> {
             let mut block = Vec::new();
-            if frame > 0 { block.extend_from_slice(&[0x8C, 0x01]); }
+            if frame > 0 {
+                block.extend_from_slice(&[0x8C, 0x01]);
+            }
             block.extend_from_slice(&[0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00]);
             block.extend_from_slice(text.as_bytes());
             let size_code = ((block.len() + 2) / 2).min(63) as u8;
             let svc_hdr = 0x20 | (block.len().min(31) as u8);
             let mut triples = vec![(3u8, size_code, svc_hdr)];
             for i in (0..block.len()).step_by(2) {
-                if i + 1 < block.len() { triples.push((2, block[i], block[i + 1])); }
-                else { triples.push((2, block[i], 0x00)); }
+                if i + 1 < block.len() {
+                    triples.push((2, block[i], block[i + 1]));
+                } else {
+                    triples.push((2, block[i], 0x00));
+                }
             }
             sei_au(&triples)
         };
@@ -569,7 +593,11 @@ mod tests {
         }
 
         fs::write(&corpus_file, &out).expect("write bear-708.h264");
-        println!("Wrote {} ({:.1} KB, 150 frames)", corpus_file.display(), out.len() as f64 / 1024.0);
+        println!(
+            "Wrote {} ({:.1} KB, 150 frames)",
+            corpus_file.display(),
+            out.len() as f64 / 1024.0
+        );
     }
 
     #[test]
