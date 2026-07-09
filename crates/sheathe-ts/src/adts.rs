@@ -36,13 +36,19 @@ pub(crate) fn frames(data: &[u8], pts: u64, dts: u64, sample_rate: u32) -> Vec<S
     samples
 }
 
-/// Read the AAC sample rate index from the first ADTS header, if present.
+/// Offset of the first ADTS syncword (`0xFFF`) in `data`, if any.
+pub(crate) fn find_sync(data: &[u8]) -> Option<usize> {
+    (0..data.len().saturating_sub(6)).find(|&i| data[i] == 0xff && (data[i + 1] & 0xf0) == 0xf0)
+}
+
+/// Read the AAC sample rate from the first ADTS header, if present.
+///
+/// Scans for the syncword: real transport streams do not place the ADTS frame
+/// exactly at the start of the reassembled PES payload.
 pub(crate) fn sample_rate_hz(data: &[u8]) -> Option<u32> {
-    if data.len() < 7 || data[0] != 0xff || (data[1] & 0xf0) != 0xf0 {
-        return None;
-    }
-    let idx = (data[2] & 0x3c) >> 2;
-    ADTS_SAMPLE_RATES.get(usize::from(idx)).copied()
+    let off = find_sync(data)?;
+    let idx = (data[off + 2] & 0x3c) >> 2;
+    ADTS_SAMPLE_RATES.get(usize::from(idx)).copied().filter(|&r| r != 0)
 }
 
 /// ADTS sampling-frequency-index → Hz (ISO/IEC 13818-7 Table 35).

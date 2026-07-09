@@ -57,12 +57,34 @@ fn plain_box(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
     out
 }
 
-/// `vp09` VisualSampleEntry + `vpcC`. Config fields default to profile 0 / 8-bit
-/// / 4:2:0 (a full bitstream-accurate `vpcC` is left for a later pass).
+/// VP9 level index (Annex A) from the luma picture size. The full level also
+/// depends on the luma sample *rate* (needs frame rate), but the picture-size
+/// bound is what common encoders — and Shaka Packager — report here.
+fn vp9_level(width: u16, height: u16) -> u8 {
+    let pixels = u32::from(width) * u32::from(height);
+    // (MaxLumaPicSize, level_idx) in ascending order.
+    const TABLE: &[(u32, u8)] = &[
+        (36_864, 10),
+        (73_728, 11),
+        (122_880, 20),
+        (245_760, 21),
+        (552_960, 30),
+        (983_040, 31),
+        (2_228_224, 40),
+        (8_912_896, 50),
+        (35_651_584, 60),
+    ];
+    TABLE.iter().find(|&&(max, _)| pixels <= max).map(|&(_, l)| l).unwrap_or(62)
+}
+
+/// `vp09` VisualSampleEntry + `vpcC`. Profile 0 / 8-bit / 4:2:0; the level is
+/// derived from the picture size and the RFC 6381 codec string is emitted in
+/// full (`vp09.PP.LL.DD.CC.cp.tc.mc.FR`) to match Shaka Packager.
 pub(crate) fn vp9_entry(width: u16, height: u16) -> (Vec<u8>, String) {
+    let level = vp9_level(width, height);
     let vpcc_payload = [
-        0x00,                // profile
-        0x0a,                // level 1.0
+        0x00,                // profile 0
+        level,               // level (from luma picture size)
         (8 << 4) | (1 << 1), // bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0
         0x02,                // colourPrimaries = unspecified
         0x02,                // transferCharacteristics = unspecified
@@ -71,7 +93,8 @@ pub(crate) fn vp9_entry(width: u16, height: u16) -> (Vec<u8>, String) {
         0x00, // codecInitializationDataSize
     ];
     let vpcc = full_box(b"vpcC", 1 << 24, &vpcc_payload); // version 1
-    (visual_entry(b"vp09", width, height, &vpcc), "vp09.00.10.08".to_string())
+    let codec = format!("vp09.00.{level:02}.08.01.02.02.02.00");
+    (visual_entry(b"vp09", width, height, &vpcc), codec)
 }
 
 /// `vp08` VisualSampleEntry (VP8 carries no standard MP4 config box).
@@ -91,7 +114,8 @@ pub(crate) fn av1_entry(codec_private: &[u8], width: u16, height: u16) -> (Vec<u
 pub(crate) fn opus_entry(codec_private: &[u8], channels: u16) -> Option<(Vec<u8>, String)> {
     let dops = dops_from_opus_head(codec_private)?;
     // Opus always decodes at 48 kHz in ISO-BMFF.
-    Some((audio_entry(b"Opus", channels, 48_000, &dops), "Opus".to_string()))
+    // Box type is `Opus`; the RFC 6381 codecs value is lowercase `opus`.
+    Some((audio_entry(b"Opus", channels, 48_000, &dops), "opus".to_string()))
 }
 
 /// Translate an `OpusHead` (little-endian) into a `dOps` box (big-endian).
@@ -128,7 +152,8 @@ mod tests {
         let (entry, codec) = vp9_entry(1280, 720);
         assert_eq!(&entry[4..8], b"vp09");
         assert!(entry.windows(4).any(|w| w == b"vpcC"));
-        assert_eq!(codec, "vp09.00.10.08");
+        // 1280×720 = 921600 luma samples → level 3.1 (31).
+        assert_eq!(codec, "vp09.00.31.08.01.02.02.02.00");
     }
 
     #[test]
@@ -158,6 +183,6 @@ mod tests {
         assert_eq!(entry[i + 5], 2); // channels
         // pre_skip 312 big-endian.
         assert_eq!(u16::from_be_bytes([entry[i + 6], entry[i + 7]]), 312);
-        assert_eq!(codec, "Opus");
+        assert_eq!(codec, "opus");
     }
 }

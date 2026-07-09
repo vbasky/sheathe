@@ -12,12 +12,16 @@
 
 use crate::box_reader::{Cursor, Mp4Box, top_level};
 use sheathe_core::{Codec, Error, MediaKind, Result, Sample, SampleFlags, StreamInfo, Timescale};
+use std::collections::HashMap;
 
 /// A demuxed MP4: the parsed tracks plus a borrow of the source bytes so
 /// [`Mp4Demuxer::samples`] can slice out coded sample data.
 pub struct Mp4Demuxer<'a> {
     data: &'a [u8],
     tracks: Vec<Track>,
+    /// Samples reconstructed from `moof`/`traf`/`trun` fragments, keyed by
+    /// `track_id`. Empty for progressive (sample-table) files.
+    fragments: HashMap<u32, Vec<Sample>>,
 }
 
 /// One track: its describing [`StreamInfo`] plus the raw sample table needed to
@@ -96,7 +100,16 @@ impl<'a> Mp4Demuxer<'a> {
         if tracks.is_empty() {
             return Err(Error::malformed("moov contained no readable tracks"));
         }
-        Ok(Self { data, tracks })
+
+        // Fragmented MP4 (CMAF): samples live in `moof`/`trun`, not `stbl`.
+        let fragments = parse_fragments(data, &moov)?;
+        for t in &mut tracks {
+            if let Some(s) = fragments.get(&t.track_id) {
+                t.sample_count = s.len() as u32;
+            }
+        }
+
+        Ok(Self { data, tracks, fragments })
     }
 
     /// The parsed tracks.
@@ -109,8 +122,159 @@ impl<'a> Mp4Demuxer<'a> {
     pub fn samples(&self, index: usize) -> Result<Vec<Sample>> {
         let track =
             self.tracks.get(index).ok_or_else(|| Error::malformed("track index out of range"))?;
+        if let Some(frag) = self.fragments.get(&track.track_id) {
+            if !frag.is_empty() {
+                return Ok(frag.clone());
+            }
+        }
         track.table.build_samples(self.data)
     }
+}
+
+// ---- Fragmented MP4 (moof / traf / trun) ------------------------------------
+
+/// Per-track fallback sample parameters declared once in `mvex`/`trex`.
+#[derive(Clone, Copy, Default)]
+struct TrexDefaults {
+    duration: u32,
+    size: u32,
+    flags: u32,
+}
+
+/// Read a full-box version byte and its 24-bit flags.
+fn version_and_flags(c: &mut Cursor<'_>) -> Result<(u8, u32)> {
+    let version = c.u8()?;
+    let flags = (u32::from(c.u8()?) << 16) | (u32::from(c.u8()?) << 8) | u32::from(c.u8()?);
+    Ok((version, flags))
+}
+
+/// Byte offset of `sub` within `data` (both must alias the same allocation).
+fn offset_in(data: &[u8], sub: &[u8]) -> usize {
+    (sub.as_ptr() as usize).saturating_sub(data.as_ptr() as usize)
+}
+
+/// Reconstruct samples from every `moof` in the file, keyed by `track_id`.
+/// Returns an empty map for progressive (non-fragmented) files.
+fn parse_fragments(data: &[u8], moov: &Mp4Box<'_>) -> Result<HashMap<u32, Vec<Sample>>> {
+    let mut trex: HashMap<u32, TrexDefaults> = HashMap::new();
+    if let Some(mvex) = moov.child(b"mvex")? {
+        for b in mvex.children() {
+            let b = b?;
+            if &b.kind != b"trex" {
+                continue;
+            }
+            let mut c = Cursor::new(b.body);
+            version_and_flags(&mut c)?;
+            let track_id = c.u32()?;
+            c.u32()?; // default_sample_description_index
+            let duration = c.u32()?;
+            let size = c.u32()?;
+            let flags = c.u32()?;
+            trex.insert(track_id, TrexDefaults { duration, size, flags });
+        }
+    }
+
+    let mut out: HashMap<u32, Vec<Sample>> = HashMap::new();
+    let mut decode_time: HashMap<u32, u64> = HashMap::new();
+    for b in top_level(data) {
+        let b = b?;
+        if &b.kind != b"moof" {
+            continue;
+        }
+        let moof_start = offset_in(data, b.body).saturating_sub(8);
+        for traf in b.children() {
+            let traf = traf?;
+            if &traf.kind == b"traf" {
+                parse_traf(data, &traf, moof_start, &trex, &mut decode_time, &mut out)?;
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn parse_traf(
+    data: &[u8],
+    traf: &Mp4Box<'_>,
+    moof_start: usize,
+    trex: &HashMap<u32, TrexDefaults>,
+    decode_time: &mut HashMap<u32, u64>,
+    out: &mut HashMap<u32, Vec<Sample>>,
+) -> Result<()> {
+    let tfhd = traf.child(b"tfhd")?.ok_or_else(|| Error::malformed("traf without tfhd"))?;
+    let mut c = Cursor::new(tfhd.body);
+    let (_v, flags) = version_and_flags(&mut c)?;
+    let track_id = c.u32()?;
+    // default-base-is-moof and the common no-base case both anchor at the moof.
+    let mut base = moof_start as u64;
+    if flags & 0x00_0001 != 0 {
+        base = c.u64()?; // base-data-offset-present
+    }
+    if flags & 0x00_0002 != 0 {
+        c.u32()?; // sample-description-index-present
+    }
+    let def = trex.get(&track_id).copied().unwrap_or_default();
+    let default_duration = if flags & 0x00_0008 != 0 { c.u32()? } else { def.duration };
+    let default_size = if flags & 0x00_0010 != 0 { c.u32()? } else { def.size };
+    let default_flags = if flags & 0x00_0020 != 0 { c.u32()? } else { def.flags };
+
+    let mut dts = *decode_time.get(&track_id).unwrap_or(&0);
+    if let Some(tfdt) = traf.child(b"tfdt")? {
+        let mut t = Cursor::new(tfdt.body);
+        let (v, _f) = version_and_flags(&mut t)?;
+        dts = if v == 1 { t.u64()? } else { u64::from(t.u32()?) };
+    }
+
+    let samples = out.entry(track_id).or_default();
+    for trun in traf.children() {
+        let trun = trun?;
+        if &trun.kind != b"trun" {
+            continue;
+        }
+        let mut c = Cursor::new(trun.body);
+        let (_v, tflags) = version_and_flags(&mut c)?;
+        let count = c.u32()?;
+        let mut off = base;
+        if tflags & 0x00_0001 != 0 {
+            let data_offset = c.u32()? as i32; // data-offset-present (signed, from `base`)
+            off = (base as i64 + i64::from(data_offset)) as u64;
+        }
+        let first_flags = if tflags & 0x00_0004 != 0 { Some(c.u32()?) } else { None };
+
+        for i in 0..count {
+            let duration = if tflags & 0x00_0100 != 0 { c.u32()? } else { default_duration };
+            let size = if tflags & 0x00_0200 != 0 { c.u32()? } else { default_size };
+            let sflags = if tflags & 0x00_0400 != 0 {
+                c.u32()?
+            } else if i == 0 {
+                first_flags.unwrap_or(default_flags)
+            } else {
+                default_flags
+            };
+            let cto: i64 = if tflags & 0x00_0800 != 0 { i64::from(c.u32()? as i32) } else { 0 };
+
+            let start = off as usize;
+            let end = start
+                .checked_add(size as usize)
+                .filter(|&e| e <= data.len())
+                .ok_or_else(|| Error::malformed("fragment sample out of bounds"))?;
+            let mut sfl = SampleFlags::empty();
+            if sflags & 0x0001_0000 == 0 {
+                sfl.insert(SampleFlags::KEYFRAME); // sample_is_non_sync_sample clear
+            }
+            let pts = (dts as i64 + cto).max(0) as u64;
+            samples.push(Sample {
+                dts,
+                pts,
+                duration,
+                flags: sfl,
+                data: data[start..end].to_vec(),
+            });
+            dts = dts.saturating_add(u64::from(duration));
+            off = end as u64;
+        }
+    }
+    decode_time.insert(track_id, dts);
+    Ok(())
 }
 
 /// Find a top-level box by type.
@@ -256,6 +420,7 @@ fn codec_from_fourcc(f: &[u8; 4]) -> Codec {
         b"fLaC" => Codec::Flac,
         b"Opus" => Codec::Opus,
         b"wvtt" => Codec::WebVtt,
+        b"stpp" => Codec::Stpp,
         other => Codec::Other(String::from_utf8_lossy(other).into_owned()),
     }
 }

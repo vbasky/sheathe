@@ -29,6 +29,8 @@ pub enum Codec {
     Flac,
     Opus,
     WebVtt,
+    /// TTML / IMSC 1.0/1.1 timed text (`stpp`).
+    Stpp,
     /// Anything else, keyed by its fourcc or registration string.
     Other(String),
 }
@@ -49,6 +51,7 @@ impl Codec {
             Codec::Flac => "fLaC",
             Codec::Opus => "Opus",
             Codec::WebVtt => "wvtt",
+            Codec::Stpp => "stpp",
             Codec::Other(s) => s.as_str(),
         }
     }

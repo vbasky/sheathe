@@ -256,6 +256,17 @@ fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
         return Ok(LoadedInput { format: "WebVTT", tracks });
     }
 
+    if sheathe_text::is_ttml(data) {
+        let text = std::str::from_utf8(data)
+            .with_context(|| format!("TTML {path} is not valid UTF-8"))?;
+        let t = sheathe_text::ttml(text).with_context(|| format!("parsing TTML {path}"))?;
+        let tracks = vec![LoadedTrack {
+            track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
+            samples: t.samples.clone(),
+        }];
+        return Ok(LoadedInput { format: "TTML", tracks });
+    }
+
     if sheathe_es::detect(path, data).is_some() {
         let demux = EsDemuxer::parse_auto(path, data)
             .with_context(|| format!("parsing elementary stream {path}"))?;

@@ -1,6 +1,7 @@
-//! WebVTT parsing and ISO/IEC 14496-30 (`wvtt`) sample synthesis.
+//! WebVTT parsing and TTML passthrough, both producing ISO/IEC 14496-30
+//! (`wvtt` / `stpp`) sample entry and cue samples.
 
-use sheathe_core::{Error, MediaKind, Result, Sample, SampleFlags, StreamInfo, Timescale};
+use sheathe_core::{Codec, Error, MediaKind, Result, Sample, SampleFlags, StreamInfo, Timescale};
 
 /// A demuxed timed-text track (WebVTT).
 pub struct TextTrack {
@@ -60,6 +61,17 @@ pub(crate) fn render_cues(cues: &[(u64, u64, String)]) -> String {
     let mut out = String::from("WEBVTT\n");
     for (start, end, text) in cues {
         out.push_str(&format!("\n{} --> {}\n{}\n", fmt_ts(*start), fmt_ts(*end), text));
+    }
+    out
+}
+
+/// Render cues that carry an optional WebVTT cue setting (e.g. `line:84.66%`),
+/// appended to the timing line — used by the caption decoders for positioning.
+pub(crate) fn render_positioned_cues(cues: &[(u64, u64, String, Option<String>)]) -> String {
+    let mut out = String::from("WEBVTT\n");
+    for (start, end, text, setting) in cues {
+        let s = setting.as_deref().map(|x| format!(" {x}")).unwrap_or_default();
+        out.push_str(&format!("\n{} --> {}{}\n{}\n", fmt_ts(*start), fmt_ts(*end), s, text));
     }
     out
 }
@@ -159,6 +171,79 @@ fn vttc_box(settings: Option<&str>, payload: &str) -> Vec<u8> {
 /// `vtte` VTTEmptyCueBox (fills a gap with no active cue).
 fn vtte_box() -> Vec<u8> {
     box_bytes(b"vtte", &[])
+}
+
+/// Passthrough a TTML / IMSC document as an `stpp` timed-text track.
+///
+/// The entire document becomes a single cue spanning `end_ms` (parsed from the
+/// TTML `<tt>` element's `ttp:tickRate` / temporal attributes, or a default).
+/// Returns an error if the document is not valid UTF-8 or the XML root is not
+/// `<tt>`.
+pub fn ttml(text: &str) -> Result<TextTrack> {
+    let text = text.trim();
+    // Skip an optional XML declaration before looking for <tt>.
+    let body = text.strip_prefix("<?xml").and_then(|s| {
+        let end = s.find("?>")?;
+        Some(s[end + 2..].trim_start())
+    }).unwrap_or(text);
+    if !body.starts_with("<tt") {
+        return Err(Error::malformed("TTML: missing '<tt' root element"));
+    }
+
+    // Simple duration extraction: look for `dur="HH:MM:SS.mmm"` or similar
+    // on/in the `<tt>` element. Fall back to a default 10s when absent.
+    let mut dur_ms = 10_000u64;
+    if let Some(dur_str) = extract_attr(text, "dur=\"") {
+        if let Some(d) = parse_smpte_dur(dur_str) {
+            dur_ms = d.max(1);
+        }
+    }
+
+    let sample = text_sample(0, dur_ms, box_bytes(b"payl", text.as_bytes()));
+    let info = StreamInfo {
+        kind: MediaKind::Text,
+        codec: Codec::Stpp,
+        timescale: Timescale::MPEG_TS,
+        resolution: None,
+        sample_rate: None,
+        bitrate: None,
+        codec_string: Some("stpp".to_string()),
+    };
+    Ok(TextTrack { info, samples: vec![sample], sample_entry: stpp_sample_entry() })
+}
+
+/// `stpp` TTMLSampleEntry with namespace/schema/aux fields (all empty).
+fn stpp_sample_entry() -> Vec<u8> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&[0; 6]); // reserved
+    body.extend_from_slice(&1u16.to_be_bytes()); // data_reference_index
+    // stpp-specific: namespace, schema_location, auxiliary_mime_types (null-terminated).
+    body.push(0); // empty namespace
+    body.push(0); // empty schema_location
+    body.push(0); // empty auxiliary_mime_types
+    box_bytes(b"stpp", &body)
+}
+
+/// Crude attribute-value extractor: find `key`, return content until `"` or `>`.
+fn extract_attr<'a>(s: &'a str, key: &str) -> Option<&'a str> {
+    let start = s.find(key)?;
+    let val_start = start + key.len();
+    let end = s[val_start..].find(|c| c == '"' || c == '>')?;
+    Some(&s[val_start..val_start + end])
+}
+
+/// Parse a SMPTE `HH:MM:SS.mmm` duration string to milliseconds.
+fn parse_smpte_dur(s: &str) -> Option<u64> {
+    // Support: HH:MM:SS.mmm, HH:MM:SS, MM:SS.mmm, or MM:SS
+    let s = s.trim();
+    let (hms, ms) = if let Some((h, m)) = s.split_once('.') { (h, m.parse().ok()?) } else { (s, 0) };
+    let parts: Vec<&str> = hms.split(':').collect();
+    let (h, m, sec): (u64, u64, u64) = match parts.as_slice() {
+        [h, m, s] => (h.parse().ok()?, m.parse().ok()?, s.parse().ok()?),
+        [m, s] => (0, m.parse().ok()?, s.parse().ok()?),
+        _ => return None,
+    };
+    Some(((h * 3600 + m * 60 + sec) * 1000) + ms)
 }
 
 #[cfg(test)]

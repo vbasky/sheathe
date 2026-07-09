@@ -27,13 +27,23 @@ pub(crate) fn decode(triples: &[Triple]) -> Vec<TextTrack> {
     }
 
     let mut tracks = Vec::new();
-    // Deterministic order (service 1 first).
     for (_num, mut svc) in services {
         svc.flush(last_pts + 2000);
         if svc.cues.is_empty() {
             continue;
         }
-        if let Ok(track) = webvtt(&render_cues(&svc.cues)) {
+        let style_block: String = if svc.styles.is_empty() {
+            String::new()
+        } else {
+            let mut s = "\nSTYLE\n".to_string();
+            for (_, css) in &svc.styles {
+                s.push_str(css);
+                s.push('\n');
+            }
+            s
+        };
+        let webvtt_text = format!("WEBVTT{}\n{}", style_block, render_cues(&svc.cues));
+        if let Ok(track) = webvtt(&webvtt_text) {
             tracks.push(track);
         }
     }
@@ -120,6 +130,14 @@ struct Window {
     visible: bool,
     start_ms: u64,
     text: String,
+    /// Foreground colour in 2-bit-per-channel (0-3 each), set by SPC.
+    pen_fg: Option<(u8, u8, u8)>,
+    /// Background colour, set by SPC.
+    pen_bg: Option<(u8, u8, u8)>,
+    /// Italic flag, set by SPA.
+    italic: bool,
+    /// Underline flag, set by SPA.
+    underline: bool,
 }
 
 #[derive(Default)]
@@ -127,6 +145,8 @@ struct Service {
     windows: [Window; 8],
     current: usize,
     cues: Vec<(u64, u64, String)>,
+    /// Accumulated unique CSS styles (class_name → colour) for the STYLE block.
+    styles: Vec<(String, String)>,
 }
 
 impl Service {
@@ -241,11 +261,27 @@ impl Service {
                 }
                 1
             }
-            0x90 => 3,                                          // SPA SetPenAttributes
-            0x91 => 4,                                          // SPC SetPenColor
-            0x92 => 3,                                          // SPL SetPenLocation
+            0x90 => {
+                // SPA SetPenAttributes: pen_size(2) | font_style(3) | italics(1) | underline(1) | text_type(1)
+                self.style_pool(Some((arg(1), arg(2))));
+                3
+            }
+            0x91 => {
+                // SPC SetPenColor: fg_colour_3bytes(6bits each) | bg_3bytes | edge(3) | edge_colour(6)
+                let fg_r = arg(1) >> 6;
+                let fg_g = (arg(1) >> 4) & 3;
+                let fg_b = (arg(1) >> 2) & 3;
+                let bg_r = arg(2) >> 6;
+                let bg_g = (arg(2) >> 4) & 3;
+                let bg_b = (arg(2) >> 2) & 3;
+                let w = &mut self.windows[self.current];
+                w.pen_fg = Some((fg_r, fg_g, fg_b));
+                w.pen_bg = Some((bg_r, bg_g, bg_b));
+                4
+            }
+            0x92 => 3, // SPL SetPenLocation: row(4) | column(4) — positioning handled by other means
             0x93..=0x96 => [4, 5, 6, 1][usize::from(b - 0x93)], // reserved
-            0x97 => 5,                                          // SWA SetWindowAttributes
+            0x97 => 5, // SWA SetWindowAttributes: fill, border, scroll, display — all colour, positionskipped
             0x98..=0x9f => {
                 // DFx: define window (6 args); arg0 bit 0x20 = visible.
                 let n = usize::from(b & 0x07);
@@ -265,13 +301,48 @@ impl Service {
     }
 
     fn put(&mut self, ch: char) {
-        let w = &mut self.windows[self.current];
-        if w.defined {
-            w.text.push(ch);
+        if self.windows[self.current].defined {
+            self.style_pool(None);
+            self.windows[self.current].text.push(ch);
         }
     }
 
-    /// Apply `f` to every window selected by `bitmap`.
+    /// Ensure a style class exists for the given attributes.
+    /// When `attrs` is None, read pen attributes from the current window.
+    fn style_pool(&mut self, attrs: Option<(u8, u8)>) -> String {
+        let class = match attrs {
+            Some((a1, a2)) => {
+                let italic = (a1 & 0x04) != 0;
+                let underline = (a1 & 0x02) != 0;
+                let font = a2 & 0x07;
+                let sz = a1 >> 6;
+                let mut parts = Vec::new();
+                if italic { parts.push("it".to_string()); }
+                if underline { parts.push("ul".to_string()); }
+                if font != 0 { parts.push(format!("f{}", font)); }
+                if sz != 0 { parts.push(format!("s{}", sz)); }
+                if parts.is_empty() { String::new() } else { parts.join("_") }
+            }
+            None => String::new(),
+        };
+        let w = &self.windows[self.current];
+        let color_class = if let Some((r, g, b)) = w.pen_fg {
+            let name = format!("fg_{r}_{g}_{b}");
+            if !self.styles.iter().any(|(k, _)| k == &name) {
+                let css = format!("::cue(.{}) {{ color: rgb({}, {}, {}) }}",
+                    name, r * 85, g * 85, b * 85);
+                self.styles.push((name.clone(), css));
+            }
+            name
+        } else {
+            String::new()
+        };
+        [&class[..], &color_class[..]].iter()
+            .filter(|s| !s.is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ")
+    }
     fn for_each_window(
         &mut self,
         bitmap: u8,
@@ -326,6 +397,40 @@ mod tests {
         sei_au(&triples)
     }
 
+    fn dtvcc_frame1() -> Vec<u8> {
+        // Frame 1: DF0(visible) + "Hi!" → 10-byte block, size_code=6, svc_hdr=0x2A
+        // DF0: 0x98 + 6 args (0x20 visible, rest 0)
+        // Text: Hi!
+        // Packet: [hdr=0x06] [svc=0x2A] [DF0...] [Hi!] [pad to 12]
+        let triples = [
+            (3, 0x06, 0x2A),
+            (2, 0x98, 0x20), (2, 0x00, 0x00), (2, 0x00, 0x00),
+            (2, 0x00, 0x48), (2, 0x69, 0x21), (2, 0x00, 0x00), // Hi! + pad
+        ];
+        sei_au(&triples)
+    }
+
+    fn dtvcc_frame2() -> Vec<u8> {
+        // Frame 2: DLW(0x01) + DF0(visible) + "CEA-708 verified."
+        // Block: DLW(2) + DF0(7) + "CEA-708 verified."(17) = 26 bytes
+        // svc_hdr = 0x20 | 26 = 0x3A, size_code = ceil(27/2) = 14, pkt_hdr = 0x0E
+        let block = [
+            0x8C, 0x01, // DLW window 0
+            0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00, // DF0 visible
+            b'C', b'E', b'A', b'-', b'7', b'0', b'8', b' ',
+            b'v', b'e', b'r', b'i', b'f', b'i', b'e', b'd', b'.',
+        ];
+        let mut triples = vec![(3u8, 0x0E, 0x3A)];
+        for i in (0..block.len()).step_by(2) {
+            if i + 1 < block.len() {
+                triples.push((2, block[i], block[i + 1]));
+            } else {
+                triples.push((2, block[i], 0x00));
+            }
+        }
+        sei_au(&triples)
+    }
+
     #[test]
     fn decodes_dtvcc_window_text() {
         let au = dtvcc_hi();
@@ -337,8 +442,138 @@ mod tests {
     }
 
     #[test]
+    fn two_frame_dlw_cycle() {
+        let f1 = dtvcc_frame1();
+        let f2 = dtvcc_frame2();
+        let samples = [(0u64, f1.as_slice()), (3600, f2.as_slice())];
+        let triples = cc_triples(&samples, false);
+        let tracks = decode(&triples);
+        assert_eq!(tracks.len(), 1, "expected one 708 track");
+        let t = &tracks[0];
+        let _vtte_count = t.samples.iter()
+            .filter(|s| s.data.windows(4).any(|w| w == b"vtte"))
+            .count();
+        let payl_count = t.samples.iter()
+            .filter(|s| s.data.windows(4).any(|w| w == b"payl"))
+            .count();
+        assert!(payl_count >= 1, "expected >= 1 payl, got {payl_count}");
+        let all_data: Vec<u8> = t.samples.iter().flat_map(|s| s.data.clone()).collect();
+        assert!(all_data.windows(3).any(|w| w == b"Hi!"),
+            "Hi! not found in decoded output");
+        assert!(all_data.windows(8).any(|w| w == b"verified"),
+            "verified not found in decoded output");
+    }
+
+    #[test]
+    fn dtvcc_build_packet_match() {
+        // Verify that build_packet() used in the corpus generator produces
+        // the same output as the manually-constructed dtvcc_frame2().
+        use crate::sei::test_support::sei_au;
+
+        // Replicate build_packet from generate_708_corpus_asset
+        let build_packet = |frame: usize, text: &str| -> Vec<u8> {
+            let mut block = Vec::new();
+            if frame > 0 { block.extend_from_slice(&[0x8C, 0x01]); }
+            block.extend_from_slice(&[0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00]);
+            block.extend_from_slice(text.as_bytes());
+            let size_code = ((block.len() + 2) / 2).min(63) as u8;
+            let svc_hdr = 0x20 | (block.len().min(31) as u8);
+            let mut triples = vec![(3u8, size_code, svc_hdr)];
+            for i in (0..block.len()).step_by(2) {
+                if i + 1 < block.len() { triples.push((2, block[i], block[i + 1])); }
+                else { triples.push((2, block[i], 0x00)); }
+            }
+            sei_au(&triples)
+        };
+        let generated = build_packet(1, "CEA-708 verified.");
+        let reference = dtvcc_frame2();
+        assert_eq!(generated.len(), reference.len(), "length mismatch");
+        let gen_ga94 = &generated[generated.iter().position(|&b| b == 0xb5).unwrap()..];
+        let ref_ga94 = &reference[reference.iter().position(|&b| b == 0xb5).unwrap()..];
+        assert_eq!(gen_ga94, ref_ga94, "GA94 payload mismatch");
+    }
+
+    /// Generate a synthetic H.264 Annex B clip with CEA-708 captions.
+    ///
+    /// Run with `cargo test -p sheathe-text -- generate_708_corpus_asset --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn generate_708_corpus_asset() {
+        use crate::sei::test_support::sei_au;
+        use std::fs;
+
+        let captions = [
+            "Hi!",
+            "CEA-708 verified.",
+            "DTVCC decoder works.",
+            "Window model OK.",
+            "Multiple windows.",
+            "Timing matches.",
+            "WebVTT output.",
+            "Pop-on style.",
+            "708 features.",
+            "End-to-end test.",
+        ];
+
+        let corpus_file: std::path::PathBuf = [
+            env!("CARGO_MANIFEST_DIR"),
+            "..", "..", "corpus", "media", "bear-708.h264",
+        ].iter().collect();
+
+        // Use known-good SPS (26 bytes) and PPS (5 bytes) from bear.h264
+        let sps: &[u8] = &[
+            0x67, 0x64, 0x00, 0x1f, 0xac, 0x34, 0xe5, 0x01,
+            0x40, 0x16, 0xec, 0x04, 0x40, 0x00, 0x00, 0x19,
+            0x00, 0x00, 0x05, 0xda, 0xa3, 0xc6, 0x0c, 0x45,
+            0x80, 0x00,
+        ];
+        let pps: &[u8] = &[0x68, 0xee, 0xb2, 0xc8, 0xb0];
+        // Slice: an IDR frame (type 5) from bear.h264
+        let slice: &[u8] = &[
+            0x65, 0x88, 0x80, 0x20, 0x01, 0xff, 0x98, 0x57,
+            0x23, 0x12, 0x68, 0x17, 0x2f, 0x66, 0x04, 0x50,
+            0xf7, 0x05, 0x5f, 0x79, 0x8b, 0xd1, 0x9e, 0x7f,
+            0x5f, 0x20, 0x6d, 0x53, 0xb5, 0x46,
+        ];
+
+        let build_packet = |frame: usize, text: &str| -> Vec<u8> {
+            let mut block = Vec::new();
+            if frame > 0 { block.extend_from_slice(&[0x8C, 0x01]); }
+            block.extend_from_slice(&[0x98, 0x20, 0x00, 0x00, 0x00, 0x00, 0x00]);
+            block.extend_from_slice(text.as_bytes());
+            let size_code = ((block.len() + 2) / 2).min(63) as u8;
+            let svc_hdr = 0x20 | (block.len().min(31) as u8);
+            let mut triples = vec![(3u8, size_code, svc_hdr)];
+            for i in (0..block.len()).step_by(2) {
+                if i + 1 < block.len() { triples.push((2, block[i], block[i + 1])); }
+                else { triples.push((2, block[i], 0x00)); }
+            }
+            sei_au(&triples)
+        };
+
+        let mut out = Vec::new();
+        // SPS and PPS only once, before the first access unit
+        for nal_data in [sps, pps] {
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(nal_data);
+        }
+        for frame in 0..150 {
+            // Slice first (VCL trigger for AU partitioner), then SEI.
+            // This order ensures the partitioner assigns SEI to its own AU.
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(&slice);
+            let sei = build_packet(frame, captions[frame % captions.len()]);
+            let sei_slice = sei.as_slice();
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(sei_slice);
+        }
+
+        fs::write(&corpus_file, &out).expect("write bear-708.h264");
+        println!("Wrote {} ({:.1} KB, 150 frames)", corpus_file.display(), out.len() as f64 / 1024.0);
+    }
+
+    #[test]
     fn no_dtvcc_no_tracks() {
-        // Only 608 field-1 triples present → no 708 output.
         let au = sei_au(&[(0, 0x48, 0x49)]);
         let triples = cc_triples(&[(0, au.as_slice())], false);
         assert!(decode(&triples).is_empty());
@@ -349,6 +584,6 @@ mod tests {
         let pkt = [0x06, 0x29, 0x98, 0x20, 0, 0, 0, 0, 0, 0x48, 0x49, 0x00];
         let blocks = service_blocks(&pkt);
         assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].0, 1); // service 1
+        assert_eq!(blocks[0].0, 1);
     }
 }

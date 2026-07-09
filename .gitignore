@@ -3,8 +3,9 @@
 Cargo.lock.bak
 .DS_Store
 
-# Local sample/oracle corpus (large media; never committed).
-/corpus
+# Local sample/oracle corpus: media blobs are never committed, but the
+# fetch script / manifest / checksums under corpus/ are.
+/corpus/media/
 /fixtures/*.mp4
 /fixtures/*.ts
 /fixtures/*.m4s

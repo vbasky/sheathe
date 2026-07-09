@@ -1,9 +1,10 @@
 //! Timed-text input for the **sheathe** packager.
 //!
-//! Two read paths, both producing [`TextTrack`]s of ISO/IEC 14496-30 (`wvtt`)
-//! cue samples with a `wvtt`/`vttC` sample entry, ready for CMAF segmentation:
+//! Three read paths, all producing [`TextTrack`]s of ISO/IEC 14496-30 cue
+//! samples with a `wvtt`/`stpp` sample entry, ready for CMAF segmentation:
 //!
 //! - [`webvtt`] — parse a `.vtt` document.
+//! - [`ttml`] — passthrough a TTML/IMSC document (`stpp` sample entry).
 //! - [`extract_captions`] — recover CEA-608 (field 1 & 2) and CEA-708 (DTVCC)
 //!   closed captions from H.264/H.265 SEI and decode them to WebVTT.
 
@@ -12,7 +13,7 @@ mod cea708;
 mod sei;
 mod webvtt;
 
-pub use webvtt::{TextTrack, webvtt};
+pub use webvtt::{TextTrack, ttml, webvtt};
 
 /// Extract every CEA-608/708 caption track carried in a sequence of
 /// `(pts_90k, annex_b_access_unit)` H.264 (or HEVC when `hevc`) video samples.
@@ -34,6 +35,12 @@ pub fn extract_captions(samples: &[(u64, &[u8])], hevc: bool) -> Vec<TextTrack> 
     }
     tracks.extend(cea708::decode(&triples));
     tracks
+}
+
+/// Detect TTML by the `<tt` signature (handles XML declaration prefix).
+pub fn is_ttml(data: &[u8]) -> bool {
+    let head = &data[..data.len().min(128)];
+    std::str::from_utf8(head).map(|s| s.contains("<tt")).unwrap_or(false)
 }
 
 /// Detect WebVTT by extension or the `WEBVTT` signature.

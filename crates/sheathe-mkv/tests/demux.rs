@@ -82,7 +82,7 @@ fn demuxes_opus_track() {
     assert_eq!(t.info.kind, MediaKind::Audio);
     assert_eq!(t.info.codec, Codec::Opus);
     assert_eq!(t.info.sample_rate, Some(48_000));
-    assert_eq!(t.info.codec_string.as_deref(), Some("Opus"));
+    assert_eq!(t.info.codec_string.as_deref(), Some("opus"));
     assert_eq!(t.samples.len(), 2);
     assert!(t.samples[0].flags.contains(SampleFlags::KEYFRAME));
     // 20 ms @ 90 kHz = 1800 ticks.

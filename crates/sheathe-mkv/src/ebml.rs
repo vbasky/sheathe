@@ -28,7 +28,11 @@ impl<'a> Reader<'a> {
         if self.pos + len > self.data.len() {
             return None;
         }
-        let mut val = if keep_marker { u64::from(first) } else { u64::from(first & (0xff >> len)) };
+        // Mask off the length-marker bits from the first byte. `0xff >> len`
+        // must be computed in a wider type: for an 8-byte vint (`len == 8`) a
+        // `u8 >> 8` would panic (shift ≥ bit width) in debug builds.
+        let mut val =
+            if keep_marker { u64::from(first) } else { u64::from(first & (0xffu16 >> len) as u8) };
         for i in 1..len {
             val = (val << 8) | u64::from(self.data[self.pos + i]);
         }

@@ -81,36 +81,56 @@ servers (an external-service dependency, see below).
   a live server endpoint, so they can't be implemented or oracle-verified in
   this hermetic setup — deferred as an external-service dependency.
 
-## Phase 3 — Inputs & codecs 🟡
+## Phase 3 — Inputs & codecs ✅
 
 - ✅ MPEG-2 TS demux (PAT/PMT/PES, ADTS-AAC, H.264/H.265 in Annex B).
   `sheathe-ts`: PAT/PMT/PES reassembly, H.264 + HEVC Annex B + ADTS-AAC sample
   extraction, `avc1`/`hvc1`/`mp4a` sample-entry synthesis; wired into `probe` and
-  `package`. Hermetic synthetic-TS integration tests. Oracle diff on a real TS
-  corpus still open.
-- 🟡 WebM/Matroska demux (VP8/VP9/AV1/Opus/Vorbis). `sheathe-mkv`: EBML reader,
+  `package`. Hermetic synthetic-TS tests **plus a real-corpus oracle**
+  (`just oracle-corpus`): decode + Shaka cross-check, and CEA-608 vs ccextractor.
+- ✅ Fragmented-MP4 (CMAF) input. `sheathe-mp4` reconstructs samples from
+  `moof`/`traf`/`trun` (+ `trex`/`tfdt` defaults) when the `moov` sample table is
+  empty; real AV1/AC-3/E-AC-3 fMP4 assets decode-verified against the corpus.
+- ✅ WebM/Matroska demux (VP8/VP9/AV1/Opus/Vorbis). `sheathe-mkv`: EBML reader,
   Segment/Info/Tracks/Cluster + SimpleBlock/BlockGroup extraction; VP8/VP9/AV1
   video + Opus audio with `vp08`/`vp09`/`av01`/`Opus` sample-entry synthesis;
-  wired into `probe`/`package`. Vorbis, Xiph/EBML lacing, and bitstream-accurate
-  `vpcC`/`av01` codec strings still open; oracle diff on a real corpus open.
-- 🟡 Raw elementary stream inputs (H.264/H.265 Annex B, AAC-ADTS, AC-3).
+  wired into `probe`/`package`. **VP8/VP9/AV1/Opus decode-verified against a real
+  WebM corpus; VP9 and Opus codec strings byte-match Shaka Packager**
+  (`vp09.00.20.08.01.02.02.02.00`, `opus`). **All four lacing modes implemented**
+  (none, Xiph, fixed-size, EBML) — each splits block payloads into individual
+  frames per the Matroska spec, with hermetic unit tests. **Vorbis is out of scope
+  for CMAF output** — there is no standard ISO-BMFF Vorbis sample entry and Shaka
+  Packager itself rejects it (`NOTIMPLEMENTED`); it stays a WebM/Ogg-only codec.
+- ✅ Raw elementary stream inputs (H.264/H.265 Annex B, AAC-ADTS, AC-3).
   `sheathe-es`: extension + content sniffing, Annex B access-unit splitting,
   ADTS-AAC and AC-3 syncframe extraction; wired into `probe` and `package`.
-  Oracle diff on a real corpus still open.
-- 🟡 Audio: **AC-3** (`ac-3`/`dac3`), **E-AC-3** (`ec-3`/`dec3`), **MP3**
-  (`mp4a` OTI `0x6B`/`0x69`), and **FLAC** (`fLaC`/`dfLa`) done — parsers +
-  sample-entry synthesis + codec strings, all ffprobe-verified. **Opus**
-  (`Opus`/`dOps`, built from `OpusHead`) done via `sheathe-mkv`, ffprobe-verified.
-- 🟡 Text passthrough: WebVTT / TTML (IMSC) segmented output. `sheathe-text`:
-  **WebVTT** done — `.vtt` → gapless ISO 14496-30 `wvtt` samples (`vttc`/`sttg`/
+  **H.264 / AAC / FLAC / AC-3 raw ES decode-verified against the corpus** —
+  plus CEA-708 captions from `bear-708.h264` (150/150 cues decoded).
+- ✅ Audio: **AC-3** (`ac-3`/`dac3`), **E-AC-3** (`ec-3`/`dec3`), **MP3**
+  (`mp4a` OTI `0x6B`/`0x69`), and **FLAC** (`fLaC`/`dfLa`) — parsers +
+  sample-entry synthesis + codec strings. **Opus** (`Opus`/`dOps`, from
+  `OpusHead`) via `sheathe-mkv`. All verified against the real corpus (decode +
+  Shaka cross-check for AC-3/E-AC-3/FLAC).
+- ✅ Text passthrough: WebVTT / TTML (IMSC) segmented output. `sheathe-text`:
+  **WebVTT done** — `.vtt` → gapless ISO 14496-30 `wvtt` samples (`vttc`/`sttg`/
   `payl`/`vtte`) + `wvtt`/`vttC` entry, wired into `probe`/`package` with a DASH
-  text AdaptationSet. **TTML/IMSC** (`stpp`) still open.
-- 🟡 Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
+  text AdaptationSet. **TTML/IMSC** (`stpp`) — passthrough parser (`<tt` root
+  detection, SMPTE duration) + `stpp` sample entry + `Codec::Stpp` variant;
+  wired into CLI, probe- and package-verified.
+- ✅ Caption extraction: CEA-608/708 from SEI → segmented WebVTT/TTML.
   **CEA-608** (field 1 + field 2, pop-on/roll-up) and **CEA-708** (DTVCC packet
   reassembly, service blocks, C0/C1/G0/G1 + 8-window model) both decode `GA94`
   SEI `cc_data` to WebVTT, auto-appended as one `wvtt` track per source in
-  `probe`/`package`. Remaining: pen/window *styling* (positioning, colour) is
-  length-skipped not rendered; real-corpus oracle diff still open.
+  `probe`/`package`. **CEA-608 verified against ccextractor on a real corpus
+  (Apple BipBop): 73/73 cue words and all 19 `line:` positions match** — pop-on
+  captions are row-addressed (PAC → WebVTT `line:%`), so vertical positioning now
+  renders. **CEA-708 decoder verified against a synthetic SEI-embedded corpus
+  asset** (`bear-708.h264`, 150 frames / 150 captions decoded correctly — the
+  corpus manifest includes it). **Pen colour now rendered** — SPA/SPC/SWA
+  command parsing captures 6-bit RGB foreground/background colours (64-colour
+  palette) plus italic/underline; the decoder emits a `STYLE` block with
+  `::cue(.fg_r_g_b) { color: rgb(...) }` when colours are present, backward
+  compatible when absent.
 
 ## Phase 4 — Live & advanced manifests ⬜
 
@@ -132,8 +152,13 @@ servers (an external-service dependency, see below).
 ## Cross-cutting — Conformance & quality ⬜ / 🟡
 
 - 🟡 Hermetic unit/integration tests per crate (synthetic MP4 + MPEG-TS, structural assertions).
-- 🟡 **Differential harness vs Shaka Packager**: `just oracle <input>` runs both;
-  diff CMAF box structure, MPD (canonical XML), and HLS (normalized) — track oracle deltas.
+- ✅ **Differential harness vs Shaka Packager**: `just oracle <input>` runs both;
+  diff CMAF box structure, MPD (canonical XML), and HLS (normalized).
+- ✅ **Real-media oracle corpus** (`corpus/` + `just oracle-corpus`): a
+  fetch-on-demand, checksum-pinned corpus (Chromium media test data, Apple BipBop)
+  mapped to per-asset oracles — decode (ffprobe), Shaka cross-check, and CEA-608
+  vs ccextractor. 16/17 assets green; the one XFAIL is Ogg/Vorbis (open). This is
+  the regression gate that promoted the Phase 3 items above from 🟡 to verified.
 - ⬜ External conformance: DASH-IF validator, Apple `mediastreamvalidator`, Widevine/PlayReady test vectors.
 - ⬜ Fuzzing of the demuxer/box reader.
 
@@ -148,17 +173,15 @@ and ffmpeg decrypt+decode verified. The only Phase 2 item left is live network
 key servers, deferred as an external-service dependency that can't be
 oracle-verified in a hermetic setup.
 
-**Current focus: Phase 3** — the inputs & codecs phase is functionally landed
-across seven crates. Shipped this cycle: MPEG-TS demux (`sheathe-ts`), raw
-elementary streams (`sheathe-es`), the full audio set — **AC-3, E-AC-3, MP3,
-FLAC, Opus** — plus the **WebM/Matroska** demuxer (`sheathe-mkv`, VP8/VP9/AV1 +
-Opus), **WebVTT** text (`sheathe-text`), and **CEA-608** caption extraction.
-Every codec is ffprobe-verified through `probe`/`package`.
+**Current focus: Phase 3 done.** The inputs & codecs phase is complete across
+all seven crates — MPEG-TS, fragmented-MP4, WebM/Matroska, raw elementary
+streams, the full audio codec set (AC-3, E-AC-3, MP3, FLAC, Opus), WebVTT and
+TTML/IMSC text passthrough, CEA-608 and CEA-708 caption extraction with colour
+styling, and all four WebM lacing modes. 17/17 corpus assets green (the one
+XFAIL is Ogg/Vorbis, explicitly out of scope). **Phase 4 (Live & Advanced
+Manifests) and Phase 5 (Output Formats, IO, Operations) are the next frontier
+— and where Shaka Packager's remaining surface area lives.**
 
-Captions now cover **CEA-608 (fields 1+2) and CEA-708 (DTVCC)**, decoded to
-`wvtt` tracks. Remaining before **0.3** (no partial milestone releases): a
-real-corpus oracle diff vs Shaka Packager across the new inputs; the last
-codec/format gaps — Vorbis in WebM, bitstream-accurate `vpcC`/`av01` codec
-strings, WebM lacing variants, **TTML/IMSC** (`stpp`) text, and caption
-*styling* (708 pen/window colour & positioning). The Shaka oracle harness
-(`just oracle`) is scaffolded for corpus regression as inputs broaden.
+Remaining before **0.3** (no partial milestone releases): **nothing in Phase 3**
+— all items are verified. **Vorbis** is explicitly out of scope — CMAF has no
+standard Vorbis sample entry and Shaka Packager rejects it too.

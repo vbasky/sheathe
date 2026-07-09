@@ -5,7 +5,11 @@
 //! carries CC3 — the same decoder runs over either.
 
 use crate::sei::Triple;
-use crate::webvtt::{TextTrack, render_cues, webvtt};
+use crate::webvtt::{TextTrack, render_positioned_cues, webvtt};
+use std::collections::BTreeMap;
+
+/// A caption cue: `(start_ms, end_ms, text, optional WebVTT setting)`.
+type Cue = (u64, u64, String, Option<String>);
 
 /// Decode one CEA-608 field (`field` = 0 or 1) into a WebVTT track, or `None`
 /// if that field carries no caption text.
@@ -18,14 +22,19 @@ pub(crate) fn decode_field(triples: &[Triple], field: u8) -> Option<TextTrack> {
     if cues.is_empty() {
         return None;
     }
-    webvtt(&render_cues(&cues)).ok()
+    webvtt(&render_positioned_cues(&cues)).ok()
 }
 
-/// Run the 608 state machine over one field's byte pairs → caption cues.
-fn decode(pairs: &[&Triple]) -> Vec<(u64, u64, String)> {
-    let mut cues: Vec<(u64, u64, String)> = Vec::new();
-    let mut back = String::new(); // pop-on: caption being loaded
-    let mut display: Option<(u64, String)> = None; // (start_ms, text) on screen
+/// Run the 608 state machine over one field's byte pairs → positioned cues.
+///
+/// Captions are row-addressed: characters load into the row selected by the most
+/// recent PAC, and each on-screen row becomes its own cue at the WebVTT line
+/// position that row maps to (matching ccextractor's safe-area layout).
+fn decode(pairs: &[&Triple]) -> Vec<Cue> {
+    let mut cues: Vec<Cue> = Vec::new();
+    let mut rows: BTreeMap<u8, String> = BTreeMap::new(); // non-displayed buffer
+    let mut display: Option<(u64, BTreeMap<u8, String>)> = None; // on-screen
+    let mut cur_row = 15u8;
     let mut rollup = false;
     let mut last_ctrl: Option<(u8, u8)> = None;
 
@@ -34,9 +43,8 @@ fn decode(pairs: &[&Triple]) -> Vec<(u64, u64, String)> {
         let b1 = p.b1 & 0x7f;
 
         if (0x10..=0x1f).contains(&b0) {
-            // Control code — doubled codes are deduplicated.
             if last_ctrl == Some((b0, b1)) {
-                last_ctrl = None;
+                last_ctrl = None; // doubled control code
                 continue;
             }
             last_ctrl = Some((b0, b1));
@@ -44,66 +52,110 @@ fn decode(pairs: &[&Triple]) -> Vec<(u64, u64, String)> {
             let misc = (b0 == 0x14 || b0 == 0x1c) && (0x20..=0x2f).contains(&b1);
             if misc {
                 match b1 {
-                    0x20 => {
-                        // RCL: resume caption loading (pop-on).
-                        rollup = false;
-                        back.clear();
+                    0x20 => rollup = false, // RCL (does not clear the buffer)
+                    0x25..=0x27 => {
+                        rollup = true; // RU2/RU3/RU4
+                        cur_row = 15;
                     }
-                    0x25..=0x27 => rollup = true, // RU2/RU3/RU4
                     0x2c => {
-                        // EDM: erase displayed memory → close current cue.
-                        if let Some((start, text)) = display.take() {
-                            push_cue(&mut cues, start, p.pts_ms, text);
+                        // EDM: erase displayed memory → close its cues.
+                        if let Some((start, map)) = display.take() {
+                            emit_rows(&mut cues, start, p.pts_ms, map);
                         }
                     }
                     0x2d => {
-                        // CR: carriage return (roll-up) → emit the line.
-                        if rollup && !back.is_empty() {
-                            push_cue(&mut cues, p.pts_ms, p.pts_ms + 2000, back.clone());
-                            back.clear();
+                        // CR: carriage return (roll-up) → emit the current row.
+                        if rollup {
+                            let text = rows.remove(&cur_row).unwrap_or_default();
+                            if !text.trim().is_empty() {
+                                cues.push((
+                                    p.pts_ms,
+                                    p.pts_ms + 2000,
+                                    text.trim().to_string(),
+                                    Some(line_setting(cur_row)),
+                                ));
+                            }
+                            rows.clear();
                         }
                     }
-                    0x2e => back.clear(), // ENM: erase non-displayed memory
+                    0x2e => rows.clear(), // ENM: erase non-displayed memory
                     0x2f => {
-                        // EOC: end of caption → flip back buffer to display.
-                        if let Some((start, text)) = display.take() {
-                            push_cue(&mut cues, start, p.pts_ms, text);
+                        // EOC: flip the non-displayed buffer to the display.
+                        if let Some((start, map)) = display.take() {
+                            emit_rows(&mut cues, start, p.pts_ms, map);
                         }
-                        display = Some((p.pts_ms, std::mem::take(&mut back)));
+                        display = Some((p.pts_ms, std::mem::take(&mut rows)));
                     }
                     _ => {}
                 }
             } else if b0 == 0x11 && (0x30..=0x3f).contains(&b1) {
-                back.push(special_char(b1));
-            } else if is_pac(b0, b1) && !back.is_empty() && !back.ends_with('\n') {
-                back.push('\n'); // preamble address code → new row
+                rows.entry(cur_row).or_default().push(special_char(b1));
+            } else if is_pac(b0, b1) {
+                cur_row = pac_row(b0, b1); // preamble address code → row
+                rows.entry(cur_row).or_default();
             }
-            // Mid-row and extended codes are ignored (styling only).
             continue;
         }
 
         last_ctrl = None;
+        let row = rows.entry(cur_row).or_default();
         if b0 >= 0x20 {
-            back.push(basic_char(b0));
+            row.push(basic_char(b0));
         }
         if b1 >= 0x20 {
-            back.push(basic_char(b1));
+            row.push(basic_char(b1));
         }
     }
 
-    // Flush a still-displayed caption.
-    if let Some((start, text)) = display.take() {
+    if let Some((start, map)) = display.take() {
         let end = pairs.last().map(|p| p.pts_ms + 2000).unwrap_or(start + 2000);
-        push_cue(&mut cues, start, end, text);
+        emit_rows(&mut cues, start, end, map);
     }
     cues
 }
 
-fn push_cue(cues: &mut Vec<(u64, u64, String)>, start: u64, end: u64, text: String) {
-    let text = text.trim_matches('\n').trim().to_string();
-    if !text.is_empty() && end > start {
-        cues.push((start, end, text));
+/// Emit each non-empty row of a displayed caption as its own positioned cue.
+fn emit_rows(cues: &mut Vec<Cue>, start: u64, end: u64, rows: BTreeMap<u8, String>) {
+    if end <= start {
+        return;
     }
+    for (row, text) in rows {
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            cues.push((start, end, text, Some(line_setting(row))));
+        }
+    }
+}
+
+/// CEA-608 PAC (channel 1) → on-screen row number (1–15).
+fn pac_row(b0: u8, b1: u8) -> u8 {
+    let base = match b0 {
+        0x11 => 1,
+        0x12 => 3,
+        0x15 => 5,
+        0x16 => 7,
+        0x17 => 9,
+        0x10 => 11,
+        0x13 => 12,
+        0x14 => 14,
+        _ => 15,
+    };
+    if b0 != 0x10 && b1 >= 0x60 { base + 1 } else { base }
+}
+
+/// WebVTT `line:` setting for a 608 row, using the same safe-area map as
+/// ccextractor: row 1 → 10%, row 15 → 84.66% (linear, 16/3 % per row).
+fn line_setting(row: u8) -> String {
+    let pct = 10.0 + f64::from(row.saturating_sub(1)) * (16.0 / 3.0);
+    let trunc = (pct * 100.0).floor() / 100.0; // ccextractor truncates to 2 dp
+    let mut s = format!("{trunc:.2}");
+    while s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    format!("line:{s}%")
 }
 
 fn is_pac(b0: u8, b1: u8) -> bool {

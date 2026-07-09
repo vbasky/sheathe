@@ -258,19 +258,131 @@ fn emit_block(
     }
 }
 
-/// Split a block payload into frames per the lacing mode (0 none, 2 fixed).
-/// Xiph (1) and EBML (3) lacing fall back to a single frame.
+/// Split a block payload into frames per the lacing mode.
+/// Lacing modes: 0 = none, 1 = Xiph, 2 = fixed-size, 3 = EBML.
 fn split_lacing(payload: &[u8], lacing: u8) -> Vec<&[u8]> {
-    if lacing == 2 && !payload.is_empty() {
-        // Fixed-size lacing: [frame_count-1][equal-size frames].
-        let count = usize::from(payload[0]) + 1;
-        let body = &payload[1..];
-        if count > 0 && body.len() % count == 0 {
-            let sz = body.len() / count;
-            return (0..count).map(|i| &body[i * sz..(i + 1) * sz]).collect();
-        }
+    match lacing {
+        1 => split_xiph_lacing(payload),
+        2 => split_fixed_lacing(payload),
+        3 => split_ebml_lacing(payload),
+        _ => vec![payload],
+    }
+}
+
+/// Fixed-size lacing: `[frame_count-1][equal-size frames]`.
+fn split_fixed_lacing(payload: &[u8]) -> Vec<&[u8]> {
+    if payload.is_empty() {
+        return vec![];
+    }
+    let count = usize::from(payload[0]) + 1;
+    let body = &payload[1..];
+    if count > 0 && body.len() % count == 0 {
+        let sz = body.len() / count;
+        return (0..count).map(|i| &body[i * sz..(i + 1) * sz]).collect();
     }
     vec![payload]
+}
+
+/// Xiph lacing: `[num_frames-1][size_1_xiph_vint][size_2_xiph_vint]...[frames]`.
+/// Each size vint is a sequence of bytes where 0xFF means +255, the first byte
+/// < 0xFF terminates the vint and contributes the final value.
+fn split_xiph_lacing(payload: &[u8]) -> Vec<&[u8]> {
+    if payload.is_empty() {
+        return vec![];
+    }
+    let num_frames = usize::from(payload[0]) + 1;
+    let mut i = 1usize;
+    let mut sizes = Vec::with_capacity(num_frames);
+    for _ in 0..num_frames {
+        let mut size = 0usize;
+        loop {
+            let b = *payload.get(i).unwrap_or(&0);
+            i += 1;
+            size += usize::from(b);
+            if b != 0xFF {
+                break;
+            }
+            if i > payload.len() {
+                return vec![payload]; // malformed
+            }
+        }
+        sizes.push(size);
+    }
+    let mut frames = Vec::with_capacity(num_frames);
+    for &size in &sizes {
+        if i + size > payload.len() {
+            break;
+        }
+        frames.push(&payload[i..i + size]);
+        i += size;
+    }
+    frames
+}
+
+/// EBML lacing: `[num_frames-1][first_size_ebml_vint][delta_2..delta_n as signed]...[frames]`.
+/// First size is an unsigned EBML varint; subsequent sizes are
+/// (prev_size + signed_delta) using the same data bits as the unsigned read,
+/// interpreted as: signed = unsigned - 2^(7n-1) where n is the vint byte count.
+fn split_ebml_lacing(payload: &[u8]) -> Vec<&[u8]> {
+    if payload.is_empty() {
+        return vec![];
+    }
+    let num_frames = usize::from(payload[0]) + 1;
+    let mut i = 1usize;
+
+    let mut sizes = Vec::with_capacity(num_frames);
+    // First size: read an EBML varint (unsigned).
+    let (first_size, _vint_len): (usize, usize) = match read_ebml_vint(payload, i) {
+        Some((s, l)) => {
+            i += l;
+            (s as usize, l)
+        }
+        None => return vec![payload],
+    };
+    sizes.push(first_size);
+
+    // Subsequent sizes: read signed EBML varint deltas.
+    for _ in 1..num_frames {
+        let (unsigned, vint_len) = match read_ebml_vint(payload, i) {
+            Some((s, l)) => {
+                i += l;
+                (s, l)
+            }
+            None => break,
+        };
+        let bits = 7 * vint_len;
+        let signed = (unsigned as i64) - (1i64 << (bits - 1));
+        let prev = *sizes.last().unwrap_or(&0) as i64;
+        let size = (prev + signed).max(0) as usize;
+        sizes.push(size);
+    }
+
+    let mut frames = Vec::with_capacity(num_frames);
+    for &size in &sizes {
+        if i + size > payload.len() {
+            break;
+        }
+        frames.push(&payload[i..i + size]);
+        i += size;
+    }
+    frames
+}
+
+/// Read an EBML varint (length-marker stripped) starting at `payload[off..]`.
+fn read_ebml_vint(data: &[u8], off: usize) -> Option<(u64, usize)> {
+    let first = *data.get(off)?;
+    if first == 0 {
+        return None;
+    }
+    let len = first.leading_zeros() as usize + 1;
+    if off + len > data.len() {
+        return None;
+    }
+    let mut val = u64::from(first & (0xffu16 >> len) as u8);
+    for i in 1..len {
+        val = (val << 8) | u64::from(data[off + i]);
+    }
+    Some((val, len))
 }
 
 fn scale_to_90k(ticks: u64, timestamp_scale: u64) -> u64 {
@@ -332,4 +444,89 @@ fn build_stream(def: &TrackDef, _samples: &[Sample]) -> Option<(Vec<u8>, StreamI
         codec_string,
     };
     Some((sample_entry, info))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_lacing_returns_payload() {
+        let frames = split_lacing(b"hello", 0);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0], b"hello");
+    }
+
+    #[test]
+    fn fixed_lacing_two_equal_frames() {
+        // [num_frames-1=1][frame1(3)][frame2(3)]
+        let data = [0x01, b'a', b'b', b'c', b'd', b'e', b'f'];
+        let frames = split_lacing(&data, 2);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], b"abc");
+        assert_eq!(frames[1], b"def");
+    }
+
+    #[test]
+    fn xiph_lacing_three_frames() {
+        // [num_frames-1=2][size1=2][size2=3][size3=4][data...]
+        let data = [0x02, 0x02, 0x03, 0x04, b'a', b'b', b'c', b'd', b'e', b'f', b'g', b'h', b'i'];
+        let frames = split_xiph_lacing(&data);
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0], b"ab");
+        assert_eq!(frames[1], b"cde");
+        assert_eq!(frames[2], b"fghi");
+    }
+
+    #[test]
+    fn xiph_lacing_with_255_overflow() {
+        // Single frame with size 257 (0xFF + 0x02)
+        let mut data = vec![0x00, 0xFF, 0x02];
+        data.extend_from_slice(&[b'x'; 257]);
+        let frames = split_xiph_lacing(&data);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].len(), 257);
+    }
+
+    #[test]
+    fn ebml_lacing_three_frames() {
+        // [num_frames-1=2][first_size=3(varint 0x83)][delta2=+5(0xC5)][delta3=+2(0xC2)]
+        // Expected sizes: [3, 8, 10]
+        let mut data = vec![0x02, 0x83, 0xC5, 0xC2];
+        data.extend(b"AAA");
+        data.extend(b"BBBBBBBB");
+        data.extend(b"CCCCCCCCCC");
+        let frames = split_ebml_lacing(&data);
+        assert_eq!(frames.len(), 3);
+        assert_eq!(frames[0], b"AAA");
+        assert_eq!(frames[1], b"BBBBBBBB");
+        assert_eq!(frames[2], b"CCCCCCCCCC");
+    }
+
+    #[test]
+    fn ebml_lacing_negative_delta() {
+        // [num_frames-1=1][first_size=6(0x86)][delta2=-3(0xBD)]
+        // Expected: [6, 3]
+        let mut data = vec![0x01, 0x86, 0xBD];
+        data.extend(b"AAAAAA");
+        data.extend(b"BBB");
+        let frames = split_ebml_lacing(&data);
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[0], b"AAAAAA");
+        assert_eq!(frames[1], b"BBB");
+    }
+
+    #[test]
+    fn read_vint_one_byte() {
+        assert_eq!(read_ebml_vint(b"\x83", 0), Some((3, 1)));
+        assert_eq!(read_ebml_vint(b"\x00", 0), None);
+    }
+
+    #[test]
+    fn read_vint_multi_byte() {
+        // 2-byte vint: 0x41 0x00 → marker_10, data bits: 01 00000000 = 256
+        assert_eq!(read_ebml_vint(b"\x41\x00", 0), Some((256, 2)));
+        // 3-byte vint: 0x20 0x00 0x00 → 0
+        assert_eq!(read_ebml_vint(b"\x20\x00\x00", 0), Some((0, 3)));
+    }
 }

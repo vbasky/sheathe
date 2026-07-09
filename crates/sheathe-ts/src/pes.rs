@@ -77,8 +77,12 @@ fn read_timestamp(data: &[u8]) -> Result<u64> {
     if data.len() < 5 {
         return Err(Error::malformed("truncated PES timestamp"));
     }
+    // The leading nibble tags the field: 0x2X = PTS-only, 0x3X = PTS (of a
+    // PTS+DTS pair), 0x1X = DTS. Bit 0 is the marker bit. Accept all three;
+    // rejecting 0x1X drops every frame carrying a DTS (all P/B-frames).
     let b0 = data[0];
-    if b0 & 0xf1 != 0x21 && b0 & 0xf1 != 0x31 {
+    let marker = b0 & 0xf1;
+    if marker != 0x11 && marker != 0x21 && marker != 0x31 {
         return Err(Error::malformed(format!("invalid PES timestamp marker 0x{b0:02x}")));
     }
     let val = (u64::from(b0 >> 1 & 0x07) << 30)

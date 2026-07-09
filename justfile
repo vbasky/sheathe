@@ -46,6 +46,14 @@ check-all: fmt-check
 run *args:
     cargo run -p sheathe -- {{args}}
 
+# Fetch the real-media oracle corpus into corpus/media/ (see corpus/manifest.toml)
+corpus:
+    ./corpus/fetch.sh
+
+# Package every corpus asset with sheathe and diff vs its oracle (status table)
+oracle-corpus filter='':
+    ./scripts/oracle_corpus.sh {{filter}}
+
 # Differential-test sheathe vs Shaka Packager on an input (requires packager on PATH)
 oracle input segment_seconds='6':
     ./scripts/shaka_oracle.sh {{input}} {{segment_seconds}}
