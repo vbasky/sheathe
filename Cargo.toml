@@ -10,6 +10,7 @@ members = [
     "crates/sheathe-dash",
     "crates/sheathe-hls",
     "crates/sheathe-crypto",
+    "crates/sheathe-package",
     "crates/sheathe-cli",
     "crates/sheathe",
 ]
@@ -51,6 +52,7 @@ sheathe-mkv = { path = "crates/sheathe-mkv", version = "0.3.0" }
 sheathe-text = { path = "crates/sheathe-text", version = "0.3.0" }
 sheathe-dash = { path = "crates/sheathe-dash", version = "0.3.0" }
 sheathe-hls = { path = "crates/sheathe-hls", version = "0.3.0" }
+sheathe-package = { path = "crates/sheathe-package", version = "0.3.0" }
 sheathe-cli = { path = "crates/sheathe-cli", version = "0.3.0" }
 
 # External.

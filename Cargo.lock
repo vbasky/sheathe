@@ -539,15 +539,7 @@ dependencies = [
  "clap",
  "crossterm",
  "image",
- "sheathe-core",
- "sheathe-crypto",
- "sheathe-dash",
- "sheathe-es",
- "sheathe-hls",
- "sheathe-mkv",
- "sheathe-mp4",
- "sheathe-text",
- "sheathe-ts",
+ "sheathe-package",
 ]
 
 [[package]]
@@ -600,6 +592,22 @@ version = "0.3.0"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
+]
+
+[[package]]
+name = "sheathe-package"
+version = "0.3.0"
+dependencies = [
+ "anyhow",
+ "sheathe-core",
+ "sheathe-crypto",
+ "sheathe-dash",
+ "sheathe-es",
+ "sheathe-hls",
+ "sheathe-mkv",
+ "sheathe-mp4",
+ "sheathe-text",
+ "sheathe-ts",
 ]
 
 [[package]]

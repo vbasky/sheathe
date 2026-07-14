@@ -15,15 +15,9 @@ readme = "README.md"
 image.workspace = true
 
 [dependencies]
-sheathe-core.workspace = true
-sheathe-mp4.workspace = true
-sheathe-ts.workspace = true
-sheathe-es.workspace = true
-sheathe-mkv.workspace = true
-sheathe-text.workspace = true
-sheathe-dash.workspace = true
-sheathe-hls.workspace = true
-sheathe-crypto.workspace = true
+# Packaging pipeline (demux → segment → manifest) lives in sheathe-package; the CLI
+# is a thin wrapper over it.
+sheathe-package.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 base64.workspace = true

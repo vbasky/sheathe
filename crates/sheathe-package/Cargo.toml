@@ -1,0 +1,26 @@
+[package]
+name = "sheathe-package"
+version = "0.3.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+description = "End-to-end VOD packaging pipeline (demux → CMAF segment → DASH/HLS) for the sheathe packager"
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+sheathe-core.workspace = true
+sheathe-mp4.workspace = true
+sheathe-ts.workspace = true
+sheathe-es.workspace = true
+sheathe-mkv.workspace = true
+sheathe-text.workspace = true
+sheathe-dash.workspace = true
+sheathe-hls.workspace = true
+sheathe-crypto.workspace = true
+anyhow.workspace = true
+
+[lints]
+workspace = true

@@ -1,27 +1,18 @@
 //! `sheathe` command-line media packager (library entry point).
 //!
 //! A pure-Rust alternative to Shaka Packager's `packager` binary. [`run`] parses
-//! args and dispatches: `probe` lists an MP4's streams; `package` demuxes,
+//! args and dispatches: `probe` lists an input's streams; `package` demuxes,
 //! fragments, and writes CMAF init + media segments plus DASH and HLS manifests.
-//! Both the `sheathe-cli` and `sheathe` binaries are thin wrappers over [`run`].
+//! The packaging pipeline itself lives in the reusable [`sheathe_package`] crate;
+//! this module is a thin CLI over it. Both the `sheathe-cli` and `sheathe` binaries
+//! are thin wrappers over [`run`].
 
 mod banner;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use sheathe_core::Sample;
-use sheathe_core::{MediaKind, Scaled, StreamInfo};
-use sheathe_crypto::{ContentKey, ProtectionSystem, Scheme};
-use sheathe_dash::{Manifest, Protection, Representation};
-use sheathe_es::{EsDemuxer, is_mp4};
-use sheathe_hls::{KeyInfo, SegmentRef, Variant, master_playlist, media_playlist};
-use sheathe_mp4::{
-    Encryption, Fragmenter, Mp4Demuxer, SegmentPolicy, Track, write_init_segment,
-    write_media_segment,
-};
-use sheathe_ts::{TsDemuxer, packet::PACKET_SIZE};
-use std::fs;
-use std::path::Path;
+use sheathe_package::{DrmSystem, EncScheme, EncryptionSpec, PackageOptions};
+use std::path::{Path, PathBuf};
 
 /// Pure-Rust HLS/DASH/CMAF media packager.
 #[derive(Debug, Parser)]
@@ -122,7 +113,7 @@ pub fn run() -> Result<()> {
             segment_duration,
             dash,
             hls,
-            EncryptionOpts {
+            EncryptionArgs {
                 key: enc_key.as_deref(),
                 key_file: enc_key_file.as_deref(),
                 scheme: &enc_scheme,
@@ -139,166 +130,22 @@ pub fn run() -> Result<()> {
 
 /// Read an input file and print the streams sheathe detects.
 fn cmd_probe(input: &str) -> Result<()> {
-    let bytes = fs::read(input).with_context(|| format!("reading {input}"))?;
-    let loaded = load_input(input, &bytes)?;
-
+    let report = sheathe_package::probe(Path::new(input))?;
     println!(
         "probe: {input}  ({} bytes, {} track(s), {})",
-        bytes.len(),
-        loaded.tracks.len(),
-        loaded.format
+        report.size_bytes,
+        report.streams.len(),
+        report.format
     );
-    for (i, t) in loaded.tracks.iter().enumerate() {
-        println!("  [{}] track #{}  {}", i, t.track.track_id, describe(&t.track.info));
-        println!("       samples={}  timescale={}", t.samples.len(), t.track.info.timescale.0);
+    for (i, s) in report.streams.iter().enumerate() {
+        println!("  [{}] track #{}  {}", i, s.track_id, sheathe_package::describe(&s.info));
+        println!("       samples={}  timescale={}", s.sample_count, s.info.timescale.0);
     }
     Ok(())
 }
 
-/// A loaded input with pre-extracted tracks and samples.
-struct LoadedInput {
-    format: &'static str,
-    tracks: Vec<LoadedTrack>,
-}
-
-struct LoadedTrack {
-    track: Track,
-    samples: Vec<Sample>,
-}
-
-/// Detect MPEG-TS by 0x47 sync bytes at 188-byte intervals.
-fn is_transport_stream(data: &[u8]) -> bool {
-    if data.len() < PACKET_SIZE * 3 {
-        return false;
-    }
-    (0..3).all(|i| data[i * PACKET_SIZE] == 0x47)
-}
-
-/// Extract CEA-608 captions from an Annex B H.264/H.265 video track and append
-/// them as a WebVTT text track. A no-op when no captions are present.
-fn append_captions(tracks: &mut Vec<LoadedTrack>) {
-    let Some(vid) = tracks.iter().find(|t| {
-        t.track.info.kind == sheathe_core::MediaKind::Video
-            && matches!(t.track.info.codec, sheathe_core::Codec::H264 | sheathe_core::Codec::H265)
-    }) else {
-        return;
-    };
-    let hevc = vid.track.info.codec == sheathe_core::Codec::H265;
-    let samples: Vec<(u64, &[u8])> =
-        vid.samples.iter().map(|s| (s.pts, s.data.as_slice())).collect();
-    for text in sheathe_text::extract_captions(&samples, hevc) {
-        let id = tracks.len() as u32 + 1;
-        tracks.push(LoadedTrack {
-            track: Track::from_sample_entry(
-                text.info.clone(),
-                id,
-                text.sample_entry.clone(),
-                &text.samples,
-            ),
-            samples: text.samples.clone(),
-        });
-    }
-}
-
-fn load_input(path: &str, data: &[u8]) -> Result<LoadedInput> {
-    if is_transport_stream(data) {
-        let demux = TsDemuxer::parse(data).with_context(|| format!("parsing MPEG-TS {path}"))?;
-        let mut tracks: Vec<LoadedTrack> = demux
-            .tracks()
-            .iter()
-            .enumerate()
-            .map(|(i, t)| LoadedTrack {
-                track: Track::from_sample_entry(
-                    t.info.clone(),
-                    (i + 1) as u32,
-                    t.sample_entry.clone(),
-                    &t.samples,
-                ),
-                samples: t.samples.clone(),
-            })
-            .collect();
-        append_captions(&mut tracks);
-        return Ok(LoadedInput { format: "MPEG-TS", tracks });
-    }
-
-    if is_mp4(data) {
-        return load_mp4(path, data);
-    }
-
-    if sheathe_mkv::is_webm(data) {
-        let demux =
-            sheathe_mkv::MkvDemuxer::parse(data).with_context(|| format!("parsing WebM {path}"))?;
-        let tracks = demux
-            .tracks()
-            .iter()
-            .enumerate()
-            .map(|(i, t)| LoadedTrack {
-                track: Track::from_sample_entry(
-                    t.info.clone(),
-                    (i + 1) as u32,
-                    t.sample_entry.clone(),
-                    &t.samples,
-                ),
-                samples: t.samples.clone(),
-            })
-            .collect();
-        return Ok(LoadedInput { format: "WebM", tracks });
-    }
-
-    if sheathe_text::is_webvtt(path, data) {
-        let text = std::str::from_utf8(data)
-            .with_context(|| format!("WebVTT {path} is not valid UTF-8"))?;
-        let t = sheathe_text::webvtt(text).with_context(|| format!("parsing WebVTT {path}"))?;
-        let tracks = vec![LoadedTrack {
-            track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
-            samples: t.samples.clone(),
-        }];
-        return Ok(LoadedInput { format: "WebVTT", tracks });
-    }
-
-    if sheathe_text::is_ttml(data) {
-        let text =
-            std::str::from_utf8(data).with_context(|| format!("TTML {path} is not valid UTF-8"))?;
-        let t = sheathe_text::ttml(text).with_context(|| format!("parsing TTML {path}"))?;
-        let tracks = vec![LoadedTrack {
-            track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
-            samples: t.samples.clone(),
-        }];
-        return Ok(LoadedInput { format: "TTML", tracks });
-    }
-
-    if sheathe_es::detect(path, data).is_some() {
-        let demux = EsDemuxer::parse_auto(path, data)
-            .with_context(|| format!("parsing elementary stream {path}"))?;
-        let t = demux.track();
-        let mut tracks = vec![LoadedTrack {
-            track: Track::from_sample_entry(t.info.clone(), 1, t.sample_entry.clone(), &t.samples),
-            samples: t.samples.clone(),
-        }];
-        append_captions(&mut tracks);
-        return Ok(LoadedInput { format: "elementary", tracks });
-    }
-
-    load_mp4(path, data)
-}
-
-fn load_mp4(path: &str, data: &[u8]) -> Result<LoadedInput> {
-    let demux = Mp4Demuxer::parse(data).with_context(|| format!("parsing MP4 {path}"))?;
-    let mut tracks = Vec::new();
-    for (i, t) in demux.tracks().iter().enumerate() {
-        tracks.push(LoadedTrack {
-            track: t.clone(),
-            samples: demux.samples(i).with_context(|| format!("reading samples for track {i}"))?,
-        });
-    }
-    Ok(LoadedInput { format: "MP4", tracks })
-}
-
-/// Demux, fragment, and write CMAF init + media segments plus DASH/HLS manifests
-/// for one or more inputs. Each input's track(s) become separate renditions
-/// sharing one manifest (an ABR ladder when several video inputs are given).
 /// Encryption-related CLI options, grouped so `cmd_package` stays tidy.
-struct EncryptionOpts<'a> {
+struct EncryptionArgs<'a> {
     /// `<KID hex>:<KEY hex>` raw key, or `None` for clear output.
     key: Option<&'a str>,
     /// Path to a file holding the raw key; takes precedence over `key`.
@@ -319,38 +166,16 @@ fn cmd_package(
     segment_duration: f64,
     dash: bool,
     hls: bool,
-    enc: EncryptionOpts<'_>,
+    enc: EncryptionArgs<'_>,
 ) -> Result<()> {
-    let out_dir = Path::new(out);
-    fs::create_dir_all(out_dir).with_context(|| format!("creating {out}/"))?;
     // The key file (if given) wins over an inline --enc-key.
     let key_spec = match enc.key_file {
         Some(path) => Some(read_key_file(path)?),
         None => enc.key.map(str::to_string),
     };
     let encryption = key_spec
-        .map(|k| parse_enc_key(&k, enc.scheme, enc.systems, enc.crypto_period))
+        .map(|k| parse_enc_key(&k, enc.scheme, enc.key_uri, enc.systems, enc.crypto_period))
         .transpose()?;
-
-    // HLS `#EXT-X-KEY` signalling for encrypted output.
-    let hls_key = encryption.as_ref().map(|_| KeyInfo {
-        // HLS fMP4 maps the CBC schemes to SAMPLE-AES and the CTR schemes to
-        // SAMPLE-AES-CTR.
-        method: match enc.scheme {
-            "cbcs" | "cbc1" => "SAMPLE-AES",
-            _ => "SAMPLE-AES-CTR",
-        }
-        .to_string(),
-        key_format: "urn:mpeg:dash:mp4protection:2011".to_string(),
-        uri: enc.key_uri.to_string(),
-    });
-
-    let datas: Vec<Vec<u8>> = inputs
-        .iter()
-        .map(|p| fs::read(p).with_context(|| format!("reading {p}")))
-        .collect::<Result<_>>()?;
-    let loaded: Vec<LoadedInput> =
-        datas.iter().zip(inputs).map(|(d, p)| load_input(p, d)).collect::<Result<_>>()?;
 
     println!("package: {} input(s) -> {out}/", inputs.len());
     println!("  segment_duration = {segment_duration}s  (dash={dash}, hls={hls})");
@@ -368,147 +193,58 @@ fn cmd_package(
         }
     }
 
-    let policy = SegmentPolicy { target_seconds: segment_duration, keyframes_only: true };
-    let mut dash_reps = Vec::new();
-    let mut hls_variants = Vec::new();
-    let mut total_seconds = 0.0_f64;
-    let mut rep = 0usize; // global rendition index across all inputs/tracks
+    let input_paths: Vec<PathBuf> = inputs.iter().map(PathBuf::from).collect();
+    let opts =
+        PackageOptions { out_dir: PathBuf::from(out), segment_duration, dash, hls, encryption };
+    let output = sheathe_package::package(&input_paths, &opts)?;
 
-    for input in &loaded {
-        for lt in &input.tracks {
-            let track = &lt.track;
-            let samples = &lt.samples;
-            let mut frag = Fragmenter::new(track.info.clone(), policy);
-            for s in samples.iter().cloned() {
-                frag.push(s)?;
-            }
-            let segments = frag.finish();
-            let ts = track.info.timescale;
-
-            // Init segment.
-            let init_name = format!("init_{rep}.mp4");
-            fs::write(out_dir.join(&init_name), write_init_segment(track, encryption.as_ref()))
-                .with_context(|| format!("writing {init_name}"))?;
-
-            // Media segments.
-            let mut durations = Vec::with_capacity(segments.len());
-            let mut hls_segs = Vec::with_capacity(segments.len());
-            let mut sample_index = 0u64;
-            for (n, seg) in segments.iter().enumerate() {
-                let seg_name = format!("seg_{rep}_{}.m4s", n + 1);
-                let data = write_media_segment(
-                    track,
-                    (n + 1) as u32,
-                    seg,
-                    sample_index,
-                    encryption.as_ref(),
-                );
-                fs::write(out_dir.join(&seg_name), data)
-                    .with_context(|| format!("writing {seg_name}"))?;
-                sample_index += seg.samples.len() as u64;
-                durations.push(seg.duration_ticks);
-                hls_segs.push(SegmentRef {
-                    duration: Scaled::new(seg.duration_ticks, ts).seconds(),
-                    uri: seg_name,
-                });
-            }
-
-            let track_total: u64 = segments.iter().map(|s| s.duration_ticks).sum();
-            let track_seconds = Scaled::new(track_total, ts).seconds();
-            total_seconds = total_seconds.max(track_seconds);
-            println!(
-                "  [{}] {}  ->  {} + {} segment(s), {:.2}s",
-                rep,
-                describe(&track.info),
-                init_name,
-                segments.len(),
-                track_seconds,
-            );
-
-            dash_reps.push(Representation {
-                id: rep.to_string(),
-                stream: track.info.clone(),
-                init: init_name.clone(),
-                media: format!("seg_{rep}_$Number$.m4s"),
-                timescale: ts.0,
-                segment_durations: durations,
-            });
-
-            if hls {
-                let media_name = format!("media_{rep}.m3u8");
-                fs::write(
-                    out_dir.join(&media_name),
-                    media_playlist(&init_name, &hls_segs, hls_key.as_ref()),
-                )
-                .with_context(|| format!("writing {media_name}"))?;
-                hls_variants.push(Variant { stream: track.info.clone(), playlist_uri: media_name });
-            }
-
-            rep += 1;
-        }
+    println!(
+        "  {} rendition(s), {:.2}s, {} segment(s)",
+        output.renditions,
+        output.duration_seconds,
+        output.media_segments.len(),
+    );
+    if let Some(p) = &output.dash_manifest {
+        println!("  wrote {}", p.display());
     }
-
-    if dash {
-        let protection = encryption.as_ref().map(|e| Protection {
-            scheme: match e.scheme {
-                Scheme::Cenc => "cenc",
-                Scheme::Cens => "cens",
-                Scheme::Cbc1 => "cbc1",
-                Scheme::Cbcs => "cbcs",
-            }
-            .to_string(),
-            default_kid: e.key.kid,
-        });
-        let mpd =
-            Manifest { duration_seconds: total_seconds, representations: dash_reps, protection }
-                .to_xml();
-        fs::write(out_dir.join("manifest.mpd"), mpd).context("writing manifest.mpd")?;
-        println!("  wrote manifest.mpd");
-    }
-    if hls {
-        fs::write(out_dir.join("master.m3u8"), master_playlist(&hls_variants))
-            .context("writing master.m3u8")?;
-        println!("  wrote master.m3u8 (+ per-track media playlists)");
+    if let Some(p) = &output.hls_master {
+        println!("  wrote {} (+ per-track media playlists)", p.display());
     }
 
     Ok(())
 }
 
 /// Parse a `<KID hex>:<KEY hex>` raw-key spec, scheme name, and DRM-system list
-/// into an [`Encryption`].
+/// into an [`EncryptionSpec`].
 fn parse_enc_key(
     spec: &str,
     scheme: &str,
+    key_uri: &str,
     systems: &str,
     crypto_period: Option<f64>,
-) -> Result<Encryption> {
+) -> Result<EncryptionSpec> {
     let (kid_hex, key_hex) =
         spec.split_once(':').context("--enc-key must be <KID hex>:<KEY hex>")?;
     let kid = parse_hex16(kid_hex).context("invalid KID")?;
     let key = parse_hex16(key_hex).context("invalid KEY")?;
     let scheme = match scheme {
-        "cenc" => Scheme::Cenc,
-        "cens" => Scheme::Cens,
-        "cbc1" => Scheme::Cbc1,
-        "cbcs" => Scheme::Cbcs,
+        "cenc" => EncScheme::Cenc,
+        "cens" => EncScheme::Cens,
+        "cbc1" => EncScheme::Cbc1,
+        "cbcs" => EncScheme::Cbcs,
         other => {
             anyhow::bail!("unknown --enc-scheme '{other}' (expected cenc, cens, cbc1 or cbcs)")
         }
     };
     let systems = parse_protection_systems(systems)?;
-    // A fixed, asset-wide constant IV for cbcs (cenc derives per-sample IVs and
-    // ignores this).
-    let constant_iv = [
-        0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd, 0xee,
-        0xff,
-    ];
     if let Some(p) = crypto_period {
         anyhow::ensure!(p > 0.0, "--crypto-period-duration must be positive");
     }
-    Ok(Encryption {
+    Ok(EncryptionSpec {
+        kid,
+        key,
         scheme,
-        key: ContentKey { kid, key },
-        constant_iv,
+        key_uri: key_uri.to_string(),
         systems,
         crypto_period_seconds: crypto_period,
     })
@@ -517,7 +253,8 @@ fn parse_enc_key(
 /// Read a raw key from a file: the first `<KID hex>:<KEY hex>` line, ignoring
 /// blank lines and `#` comments.
 fn read_key_file(path: &str) -> Result<String> {
-    let content = fs::read_to_string(path).with_context(|| format!("reading key file {path}"))?;
+    let content =
+        std::fs::read_to_string(path).with_context(|| format!("reading key file {path}"))?;
     content
         .lines()
         .map(|line| line.split('#').next().unwrap_or("").trim())
@@ -527,12 +264,12 @@ fn read_key_file(path: &str) -> Result<String> {
 }
 
 /// Parse a comma-separated DRM-system list (e.g. `common,widevine,playready`).
-fn parse_protection_systems(list: &str) -> Result<Vec<ProtectionSystem>> {
+fn parse_protection_systems(list: &str) -> Result<Vec<DrmSystem>> {
     list.split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(|name| {
-            ProtectionSystem::parse(name).with_context(|| {
+            DrmSystem::parse(name).with_context(|| {
                 format!("unknown protection system '{name}' (expected common, widevine, playready)")
             })
         })
@@ -548,24 +285,4 @@ fn parse_hex16(s: &str) -> Result<[u8; 16]> {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).context("non-hex digit")?;
     }
     Ok(out)
-}
-
-/// One-line human description of a stream.
-fn describe(info: &StreamInfo) -> String {
-    let kind = match info.kind {
-        MediaKind::Video => "video",
-        MediaKind::Audio => "audio",
-        MediaKind::Text => "text",
-    };
-    let mut s = format!("{kind} {}", info.rfc6381());
-    if let Some((w, h)) = info.resolution {
-        s.push_str(&format!(" {w}x{h}"));
-    }
-    if let Some(rate) = info.sample_rate {
-        s.push_str(&format!(" {rate}Hz"));
-    }
-    if let Some(br) = info.bitrate {
-        s.push_str(&format!(" ~{}kbps", br / 1000));
-    }
-    s
 }
