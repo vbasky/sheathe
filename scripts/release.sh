@@ -23,11 +23,14 @@ cd "$(git rev-parse --show-toplevel)"
 CRATES=(
     sheathe-core
     sheathe-crypto
-    sheathe-dash
-    sheathe-hls
-    sheathe-mp4
+    sheathe-text
     sheathe-ts
     sheathe-es
+    sheathe-mkv
+    sheathe-mp4
+    sheathe-dash
+    sheathe-hls
+    sheathe-package
     sheathe-cli
     sheathe
 )
