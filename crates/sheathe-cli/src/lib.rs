@@ -1,11 +1,17 @@
 //! `sheathe` command-line media packager (library entry point).
 //!
 //! A pure-Rust alternative to Shaka Packager's `packager` binary. [`run`] parses
-//! args and dispatches: `probe` lists an input's streams; `package` demuxes,
-//! fragments, and writes CMAF init + media segments plus DASH and HLS manifests.
+//! args and dispatches:
+//!
+//! - **`package`** — demux → fragment → CMAF/TS/packed-audio segments + DASH/HLS
+//! - **`probe`** — list streams sheathe detects (no packaging)
+//! - **`origin`** — JIT HTTP origin (`GET /package?input=…`)
+//!
 //! The packaging pipeline itself lives in the reusable [`sheathe_package`] crate;
 //! this module is a thin CLI over it. Both the `sheathe-cli` and `sheathe` binaries
 //! are thin wrappers over [`run`].
+//!
+//! Full end-user command documentation: the repository's `docs/CLI.md`.
 
 mod banner;
 

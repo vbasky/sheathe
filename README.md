@@ -53,22 +53,88 @@ cargo install sheathe        # installs the `sheathe` binary
 cargo run -p sheathe -- --help
 ```
 
-## Usage (target CLI)
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `sheathe package` | Demux → fragment → CMAF/TS/packed-audio segments + DASH/HLS |
+| `sheathe probe` | List streams sheathe detects (no packaging) |
+| `sheathe origin` | JIT HTTP origin — package on `GET /package?input=…` |
+
+**Full flag reference, recipes, and output layouts:**
+[**docs/CLI.md**](./docs/CLI.md)
+
+### Quick start
 
 ```sh
-# Package an MP4 into 6s CMAF segments with both DASH and HLS manifests.
-sheathe package input.mp4 --out site/ --segment-duration 6 --dash --hls
+# VOD: CMAF segments + DASH + HLS
+sheathe package input.mp4 -o site/ --dash --hls --segment-duration 6
 
-# Inspect what sheathe detects (MP4, MPEG-TS, WebM, raw ES, WebVTT).
+# Inspect streams
 sheathe probe input.mp4
 sheathe probe input.ts
 sheathe probe input.webm
-sheathe package input.h264 input.ac3 --out site/ --dash --hls   # CEA-608 auto-extracted
-sheathe package input.webm subtitles.vtt --out site/ --dash
 
-# Differential-test against Shaka Packager (when `packager` is on PATH).
-just oracle input.mp4
+# ABR ladder (each file = one rendition)
+sheathe package v360.mp4 v720.mp4 v1080.mp4 -o ladder/ --dash --hls
+
+# Live-style window from a finished mezzanine
+sheathe package mezz.mp4 -o live/ --dash --hls \
+  --presentation live --live-window 3
+
+# Encrypted (cenc) multi-DRM
+sheathe package in.mp4 -o secure/ --dash --hls \
+  --enc-key 00112233445566778899aabbccddeeff:000102030405060708090a0b0c0d0e0f \
+  --protection-systems common,widevine,playready
+
+# On-demand single-file DASH
+sheathe package in.mp4 -o od/ --dash --on-demand
+
+# MPEG-TS HLS
+sheathe package in.mp4 -o ts/ --hls --format ts
+
+# Trick-play + low-latency + SCTE-35 ad markers
+sheathe package in.mp4 -o advanced/ --dash --hls \
+  --trick-play --low-latency --part-duration 0.5 \
+  --scte35 30:out:15 --scte35 45:in
+
+# JIT origin (package on request)
+sheathe origin --bind 127.0.0.1:8787 --media-root .
+# curl 'http://127.0.0.1:8787/package?input=clip.mp4&format=hls'
 ```
+
+### `package` flag groups (summary)
+
+| Group | Flags |
+|-------|--------|
+| Core | `-o/--out`, `--segment-duration`, `--dash`, `--hls` |
+| Format | `--format cmaf\|ts\|packed-audio`, `--on-demand`, `--parallel`, `--http-push` |
+| Presentation | `--presentation vod\|event\|live`, `--live-window`, `--multi-period` |
+| Advanced | `--trick-play`, `--low-latency`, `--part-duration`, `--scte35`, `--availability-start-time` |
+| Encryption | `--enc-key`, `--enc-key-file`, `--enc-scheme`, `--enc-key-uri`, `--protection-systems`, `--crypto-period-duration` |
+
+See [docs/CLI.md](./docs/CLI.md) for defaults, output directory layout, and
+every recipe (ABR, multi-period, DRM, LL-HLS, origin, push, oracle).
+
+### Developer tasks (`just`)
+
+```sh
+just check-all              # fmt + clippy + test + docs
+just oracle input.mp4       # differential vs Shaka Packager
+just oracle-corpus          # full real-media corpus gate
+just bench                  # throughput vs Shaka (optional)
+just corpus                 # fetch checksum-pinned test media
+```
+
+## Documentation map
+
+| Doc | Contents |
+|-----|----------|
+| [docs/CLI.md](./docs/CLI.md) | **Command reference** — all subcommands, flags, recipes |
+| [docs/CONFORMANCE.md](./docs/CONFORMANCE.md) | Oracle gates, DASH-IF / mediastreamvalidator, fuzz |
+| [ROADMAP.md](./ROADMAP.md) | Phase status (0–5 complete) |
+| [CHANGELOG.md](./CHANGELOG.md) | Release notes |
+| [CONTRIBUTING.md](./CONTRIBUTING.md) | Dev workflow, hooks, style |
 
 ## Method
 

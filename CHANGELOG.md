@@ -46,6 +46,11 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ### Added
 
+- **CLI documentation** — full command reference at
+  [`docs/CLI.md`](docs/CLI.md) (every subcommand, flag, output layout, and
+  workflow recipe). README usage section expanded with a command table and
+  quick-start gallery.
+
 - **Phase 5 — Output formats, IO, operations**
   - **DASH on-demand** (`--on-demand`): single-file `rep_N.mp4` with
     `isoff-on-demand` profile, `BaseURL` + `SegmentList` byte ranges.
