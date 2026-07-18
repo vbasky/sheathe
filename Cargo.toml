@@ -43,17 +43,17 @@ broken_intra_doc_links = "warn"
 [workspace.dependencies]
 # Internal crates (path + version pin; path-first so scripts/release.sh can
 # rewrite the version with a single regex).
-sheathe-core = { path = "crates/sheathe-core", version = "0.3.0" }
-sheathe-crypto = { path = "crates/sheathe-crypto", version = "0.3.0" }
-sheathe-mp4 = { path = "crates/sheathe-mp4", version = "0.3.0" }
-sheathe-ts = { path = "crates/sheathe-ts", version = "0.3.0" }
-sheathe-es = { path = "crates/sheathe-es", version = "0.3.0" }
-sheathe-mkv = { path = "crates/sheathe-mkv", version = "0.3.0" }
-sheathe-text = { path = "crates/sheathe-text", version = "0.3.0" }
-sheathe-dash = { path = "crates/sheathe-dash", version = "0.3.0" }
-sheathe-hls = { path = "crates/sheathe-hls", version = "0.3.0" }
-sheathe-package = { path = "crates/sheathe-package", version = "0.3.0" }
-sheathe-cli = { path = "crates/sheathe-cli", version = "0.3.0" }
+sheathe-core = { path = "crates/sheathe-core", version = "0.5.0" }
+sheathe-crypto = { path = "crates/sheathe-crypto", version = "0.5.0" }
+sheathe-mp4 = { path = "crates/sheathe-mp4", version = "0.5.0" }
+sheathe-ts = { path = "crates/sheathe-ts", version = "0.5.0" }
+sheathe-es = { path = "crates/sheathe-es", version = "0.5.0" }
+sheathe-mkv = { path = "crates/sheathe-mkv", version = "0.5.0" }
+sheathe-text = { path = "crates/sheathe-text", version = "0.5.0" }
+sheathe-dash = { path = "crates/sheathe-dash", version = "0.5.0" }
+sheathe-hls = { path = "crates/sheathe-hls", version = "0.5.0" }
+sheathe-package = { path = "crates/sheathe-package", version = "0.5.0" }
+sheathe-cli = { path = "crates/sheathe-cli", version = "0.5.0" }
 
 # External.
 thiserror = "2"
