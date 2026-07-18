@@ -58,6 +58,10 @@ oracle-corpus filter='':
 oracle input segment_seconds='6':
     ./scripts/shaka_oracle.sh {{input}} {{segment_seconds}}
 
+# Throughput micro-bench vs Shaka (optional packager on PATH)
+bench input='corpus/media/bear-1280x720.mp4' runs='5':
+    ./scripts/bench_throughput.sh {{input}} {{runs}}
+
 # Audit advisories + licenses + bans (requires: cargo install cargo-deny)
 deny:
     cargo deny check

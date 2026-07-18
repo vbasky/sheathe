@@ -5,6 +5,7 @@
 //! side for `.ts` / `.m2ts` inputs — Shaka Packager's MPEG-TS parser.
 
 pub mod elementary;
+pub mod mux;
 pub mod packet;
 
 mod aac_entry;
@@ -26,3 +27,4 @@ mod pes;
 mod psi;
 
 pub use demux::{TsDemuxer, TsTrack};
+pub use mux::{MuxTrack, PID_AUDIO, PID_VIDEO, mux_program, mux_segment};

@@ -12,7 +12,8 @@ mod banner;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand, ValueEnum};
 use sheathe_package::{
-    DrmSystem, EncScheme, EncryptionSpec, PackageOptions, PresentationMode, Scte35Marker,
+    DrmSystem, EncScheme, EncryptionSpec, OriginConfig, PackageOptions, PresentationMode,
+    Scte35Marker, SegmentFormat,
 };
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,23 @@ impl From<CliPresentation> for PresentationMode {
     }
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliSegmentFormat {
+    Cmaf,
+    Ts,
+    PackedAudio,
+}
+
+impl From<CliSegmentFormat> for SegmentFormat {
+    fn from(f: CliSegmentFormat) -> Self {
+        match f {
+            CliSegmentFormat::Cmaf => SegmentFormat::Cmaf,
+            CliSegmentFormat::Ts => SegmentFormat::MpegTs,
+            CliSegmentFormat::PackedAudio => SegmentFormat::PackedAudio,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Package one or more inputs into CMAF segments + DASH and/or HLS
@@ -60,6 +78,21 @@ enum Command {
     Probe {
         /// Input media file.
         input: String,
+    },
+    /// Run a JIT HTTP origin that packages on request.
+    Origin {
+        /// Bind address (default `127.0.0.1:8787`).
+        #[arg(long, default_value = "127.0.0.1:8787")]
+        bind: String,
+        /// Sandbox root for `input=` paths.
+        #[arg(long, default_value = ".")]
+        media_root: String,
+        /// Cache directory for packaged outputs.
+        #[arg(long, default_value = "/tmp/sheathe-origin")]
+        cache_dir: String,
+        /// Default segment duration for JIT packages.
+        #[arg(long, default_value_t = 6.0)]
+        segment_duration: f64,
     },
 }
 
@@ -132,6 +165,18 @@ struct PackageArgs {
     /// `seig` sample groups and per-period `pssh`.
     #[arg(long, value_name = "SECONDS")]
     crypto_period_duration: Option<f64>,
+    /// Segment container: `cmaf` (default), `ts` (MPEG-TS), or `packed-audio`.
+    #[arg(long, value_enum, default_value_t = CliSegmentFormat::Cmaf)]
+    format: CliSegmentFormat,
+    /// DASH on-demand single-file output (`SegmentList` byte ranges).
+    #[arg(long)]
+    on_demand: bool,
+    /// Parallelise per-track packaging across threads.
+    #[arg(long)]
+    parallel: bool,
+    /// After writing locally, HTTP PUT every object to this base URL.
+    #[arg(long, value_name = "URL")]
+    http_push: Option<String>,
 }
 
 /// Parse CLI args and run the requested command.
@@ -159,6 +204,10 @@ pub fn run() -> Result<()> {
             part_duration: p.part_duration,
             availability_start_time: p.availability_start_time.as_deref(),
             scte35: &p.scte35,
+            segment_format: p.format.into(),
+            on_demand: p.on_demand,
+            parallel: p.parallel,
+            http_push: p.http_push.as_deref(),
             enc: EncryptionArgs {
                 key: p.enc_key.as_deref(),
                 key_file: p.enc_key_file.as_deref(),
@@ -169,6 +218,14 @@ pub fn run() -> Result<()> {
             },
         })?,
         Command::Probe { input } => cmd_probe(&input)?,
+        Command::Origin { bind, media_root, cache_dir, segment_duration } => {
+            sheathe_package::serve_origin(OriginConfig {
+                bind,
+                media_root: PathBuf::from(media_root),
+                cache_dir: PathBuf::from(cache_dir),
+                segment_duration,
+            })?;
+        }
     }
 
     Ok(())
@@ -213,6 +270,10 @@ struct PackageCli<'a> {
     part_duration: Option<f64>,
     availability_start_time: Option<&'a str>,
     scte35: &'a [String],
+    segment_format: SegmentFormat,
+    on_demand: bool,
+    parallel: bool,
+    http_push: Option<&'a str>,
     enc: EncryptionArgs<'a>,
 }
 
@@ -275,6 +336,21 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
     }
 
     let input_paths: Vec<PathBuf> = args.inputs.iter().map(PathBuf::from).collect();
+    if args.on_demand {
+        println!("  on_demand = true (DASH SegmentList single-file)");
+    }
+    if args.parallel {
+        println!("  parallel = true");
+    }
+    if let Some(u) = args.http_push {
+        println!("  http_push = {u}");
+    }
+    match args.segment_format {
+        SegmentFormat::Cmaf => {}
+        SegmentFormat::MpegTs => println!("  format = mpeg-ts"),
+        SegmentFormat::PackedAudio => println!("  format = packed-audio"),
+    }
+
     let opts = PackageOptions {
         out_dir: PathBuf::from(args.out),
         segment_duration: args.segment_duration,
@@ -289,6 +365,10 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
         part_duration: args.part_duration,
         availability_start_time: args.availability_start_time.map(str::to_string),
         scte35_markers: markers,
+        segment_format: args.segment_format,
+        on_demand: args.on_demand,
+        parallel: args.parallel,
+        http_push_url: args.http_push.map(str::to_string),
     };
     let output = sheathe_package::package(&input_paths, &opts)?;
 

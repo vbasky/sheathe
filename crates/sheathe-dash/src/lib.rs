@@ -9,6 +9,44 @@
 use sheathe_core::{MediaKind, StreamInfo};
 use std::fmt::Write as _;
 
+/// How a representation addresses its segments in the MPD.
+#[derive(Debug, Clone)]
+pub enum SegmentAddressing {
+    /// Live/VOD multi-file layout: `SegmentTemplate` + `SegmentTimeline`.
+    Template {
+        /// Initialization segment URL.
+        init: String,
+        /// Media segment URL template (may contain `$Number$`).
+        media: String,
+        /// First segment number (default 1).
+        start_number: u32,
+        /// Presentation time offset of the first timeline sample (timescale ticks).
+        presentation_time_offset: u64,
+        /// Low-latency availability time offset in seconds.
+        availability_time_offset: Option<f64>,
+    },
+    /// On-demand single-file layout: `SegmentBase` with byte ranges.
+    ///
+    /// File layout is `[init][sidx?][media…]` or `[init][seg1][seg2]…` with
+    /// explicit media ranges in [`SegmentBaseInfo::media_ranges`].
+    Base(SegmentBaseInfo),
+}
+
+/// Byte-range addressing for a single-file on-demand representation.
+#[derive(Debug, Clone)]
+pub struct SegmentBaseInfo {
+    /// Relative URL of the single media file (`BaseURL`).
+    pub base_url: String,
+    /// Inclusive byte range of the initialization segment (`a-b`).
+    pub init_range: (u64, u64),
+    /// Inclusive byte range of the segment index (`sidx`), if present.
+    pub index_range: Option<(u64, u64)>,
+    /// Inclusive byte ranges of each media segment, in order.
+    /// When non-empty, emitted as `SegmentList`/`SegmentURL@mediaRange`
+    /// (more precise than a single index for multi-fragment files).
+    pub media_ranges: Vec<(u64, u64)>,
+}
+
 /// One selectable rendition within an adaptation set.
 #[derive(Debug, Clone)]
 pub struct Representation {
@@ -16,26 +54,18 @@ pub struct Representation {
     pub id: String,
     /// The stream this representation carries.
     pub stream: StreamInfo,
-    /// Initialization segment URL.
-    pub init: String,
-    /// Media segment URL template (may contain `$Number$`).
-    pub media: String,
     /// Timescale the segment durations are expressed in.
     pub timescale: u32,
     /// Per-segment durations, in `timescale` ticks, in order.
     pub segment_durations: Vec<u64>,
-    /// First segment number (default 1). Live windows often start higher.
-    pub start_number: u32,
-    /// Presentation time offset of the first timeline sample (timescale ticks).
-    pub presentation_time_offset: u64,
-    /// Low-latency availability time offset in seconds (`@availabilityTimeOffset`).
-    pub availability_time_offset: Option<f64>,
+    /// How segments are addressed (template vs on-demand base).
+    pub addressing: SegmentAddressing,
     /// When set, this is a trick-play representation (`maxPlayoutRate`).
     pub max_playout_rate: Option<f64>,
 }
 
 impl Representation {
-    /// Build a standard VOD representation starting at segment number 1.
+    /// Build a standard multi-file VOD representation starting at segment number 1.
     pub fn new(
         id: impl Into<String>,
         stream: StreamInfo,
@@ -47,14 +77,63 @@ impl Representation {
         Self {
             id: id.into(),
             stream,
-            init: init.into(),
-            media: media.into(),
             timescale,
             segment_durations,
-            start_number: 1,
-            presentation_time_offset: 0,
-            availability_time_offset: None,
+            addressing: SegmentAddressing::Template {
+                init: init.into(),
+                media: media.into(),
+                start_number: 1,
+                presentation_time_offset: 0,
+                availability_time_offset: None,
+            },
             max_playout_rate: None,
+        }
+    }
+
+    /// Build an on-demand single-file representation with byte-range addressing.
+    pub fn on_demand(
+        id: impl Into<String>,
+        stream: StreamInfo,
+        timescale: u32,
+        segment_durations: Vec<u64>,
+        base: SegmentBaseInfo,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            stream,
+            timescale,
+            segment_durations,
+            addressing: SegmentAddressing::Base(base),
+            max_playout_rate: None,
+        }
+    }
+
+    /// Convenience accessors for template fields (legacy package path).
+    pub fn init(&self) -> Option<&str> {
+        match &self.addressing {
+            SegmentAddressing::Template { init, .. } => Some(init.as_str()),
+            SegmentAddressing::Base(_) => None,
+        }
+    }
+
+    /// Mutable template start number (no-op for on-demand).
+    pub fn set_start_number(&mut self, n: u32) {
+        if let SegmentAddressing::Template { start_number, .. } = &mut self.addressing {
+            *start_number = n;
+        }
+    }
+
+    /// Mutable template presentation time offset (no-op for on-demand).
+    pub fn set_presentation_time_offset(&mut self, pto: u64) {
+        if let SegmentAddressing::Template { presentation_time_offset, .. } = &mut self.addressing {
+            *presentation_time_offset = pto;
+        }
+    }
+
+    /// Mutable template availability time offset (no-op for on-demand).
+    pub fn set_availability_time_offset(&mut self, ato: Option<f64>) {
+        if let SegmentAddressing::Template { availability_time_offset, .. } = &mut self.addressing {
+            *availability_time_offset = ato;
         }
     }
 }
@@ -169,11 +248,23 @@ impl Period {
     }
 }
 
+/// DASH profile family for the `@profiles` attribute.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DashProfile {
+    /// Multi-segment live/VOD with `SegmentTemplate` (`isoff-live`).
+    #[default]
+    Live,
+    /// Single-file on-demand with `SegmentBase`/`SegmentList` (`isoff-on-demand`).
+    OnDemand,
+}
+
 /// A complete DASH presentation (static or dynamic).
 #[derive(Debug, Clone)]
 pub struct Manifest {
     /// Static vs dynamic MPD.
     pub mpd_type: MpdType,
+    /// Profile family (live template vs on-demand base).
+    pub profile: DashProfile,
     /// Total media duration (static only); omitted on pure live.
     pub duration_seconds: Option<f64>,
     /// Wall-clock origin for dynamic timelines (`@availabilityStartTime`).
@@ -198,6 +289,7 @@ impl Default for Manifest {
     fn default() -> Self {
         Self {
             mpd_type: MpdType::Static,
+            profile: DashProfile::Live,
             duration_seconds: None,
             availability_start_time: None,
             publish_time: None,
@@ -264,16 +356,18 @@ impl Manifest {
             MpdType::Static => "static",
             MpdType::Dynamic => "dynamic",
         };
-        // SegmentTemplate + SegmentTimeline is the isoff-live profile for both
-        // static VOD and dynamic live presentations.
+        let profile_uri = match self.profile {
+            DashProfile::Live => "urn:mpeg:dash:profile:isoff-live:2011",
+            DashProfile::OnDemand => "urn:mpeg:dash:profile:isoff-on-demand:2011",
+        };
         let _ = write!(
             s,
             concat!(
                 "<MPD xmlns=\"urn:mpeg:dash:schema:mpd:2011\"{} ",
-                "profiles=\"urn:mpeg:dash:profile:isoff-live:2011\" ",
+                "profiles=\"{}\" ",
                 "type=\"{}\" minBufferTime=\"PT2S\""
             ),
-            cenc_ns, type_str,
+            cenc_ns, profile_uri, type_str,
         );
         if let Some(d) = self.duration_seconds {
             let _ = write!(s, " mediaPresentationDuration=\"{}\"", iso8601_duration(d));
@@ -447,22 +541,59 @@ fn render_representation(s: &mut String, r: &Representation) {
     }
     let _ = writeln!(s, " bandwidth=\"{}\">", bandwidth);
 
-    let _ = write!(
-        s,
-        "        <SegmentTemplate timescale=\"{}\" initialization=\"{}\" media=\"{}\" startNumber=\"{}\"",
-        r.timescale, r.init, r.media, r.start_number
-    );
-    if r.presentation_time_offset > 0 {
-        let _ = write!(s, " presentationTimeOffset=\"{}\"", r.presentation_time_offset);
+    match &r.addressing {
+        SegmentAddressing::Template {
+            init,
+            media,
+            start_number,
+            presentation_time_offset,
+            availability_time_offset,
+        } => {
+            let _ = write!(
+                s,
+                "        <SegmentTemplate timescale=\"{}\" initialization=\"{}\" media=\"{}\" startNumber=\"{}\"",
+                r.timescale, init, media, start_number
+            );
+            if *presentation_time_offset > 0 {
+                let _ = write!(s, " presentationTimeOffset=\"{presentation_time_offset}\"");
+            }
+            if let Some(ato) = availability_time_offset {
+                let _ = write!(
+                    s,
+                    " availabilityTimeOffset=\"{ato}\" availabilityTimeComplete=\"false\""
+                );
+            }
+            s.push_str(">\n");
+            s.push_str("          <SegmentTimeline>\n");
+            render_timeline(s, &r.segment_durations, *presentation_time_offset);
+            s.push_str("          </SegmentTimeline>\n");
+            s.push_str("        </SegmentTemplate>\n");
+        }
+        SegmentAddressing::Base(base) => {
+            let _ = writeln!(s, "        <BaseURL>{}</BaseURL>", xml_escape(&base.base_url));
+            if base.media_ranges.is_empty() {
+                // Pure SegmentBase (init + optional index only).
+                let _ = write!(s, "        <SegmentBase timescale=\"{}\"", r.timescale);
+                if let Some((a, b)) = base.index_range {
+                    let _ = write!(s, " indexRange=\"{a}-{b}\"");
+                }
+                s.push_str(">\n");
+                let (ia, ib) = base.init_range;
+                let _ = writeln!(s, "          <Initialization range=\"{ia}-{ib}\"/>");
+                s.push_str("        </SegmentBase>\n");
+            } else {
+                // SegmentList with explicit media ranges — preferred for
+                // multi-fragment single files.
+                let _ = writeln!(s, "        <SegmentList timescale=\"{}\">", r.timescale);
+                let (ia, ib) = base.init_range;
+                let _ = writeln!(s, "          <Initialization range=\"{ia}-{ib}\"/>");
+                for (a, b) in &base.media_ranges {
+                    let _ = writeln!(s, "          <SegmentURL mediaRange=\"{a}-{b}\"/>");
+                }
+                s.push_str("        </SegmentList>\n");
+            }
+        }
     }
-    if let Some(ato) = r.availability_time_offset {
-        let _ = write!(s, " availabilityTimeOffset=\"{ato}\" availabilityTimeComplete=\"false\"");
-    }
-    s.push_str(">\n");
-    s.push_str("          <SegmentTimeline>\n");
-    render_timeline(s, &r.segment_durations, r.presentation_time_offset);
-    s.push_str("          </SegmentTimeline>\n");
-    s.push_str("        </SegmentTemplate>\n");
     s.push_str("      </Representation>\n");
 }
 
@@ -578,8 +709,8 @@ mod tests {
             90000,
             vec![540_000, 540_000, 540_000],
         );
-        rep.start_number = 10;
-        rep.presentation_time_offset = 9 * 540_000;
+        rep.set_start_number(10);
+        rep.set_presentation_time_offset(9 * 540_000);
         let xml = Manifest::dynamic_live(
             "2026-07-18T00:00:00Z",
             "2026-07-18T00:01:00Z",
@@ -669,7 +800,7 @@ mod tests {
             90000,
             vec![540_000],
         );
-        main.availability_time_offset = Some(3.5);
+        main.set_availability_time_offset(Some(3.5));
         let mut trick = Representation::new(
             "0_trick",
             video_stream(),
@@ -686,6 +817,32 @@ mod tests {
         assert!(xml.contains("http://dashif.org/guidelines/trickmode"));
         // Two AdaptationSets for video (normal + trick).
         assert_eq!(xml.matches("contentType=\"video\"").count(), 2);
+    }
+
+    #[test]
+    fn on_demand_segment_list_shape() {
+        let rep = Representation::on_demand(
+            "0",
+            video_stream(),
+            90000,
+            vec![540_000, 540_000],
+            SegmentBaseInfo {
+                base_url: "rep_0.mp4".into(),
+                init_range: (0, 799),
+                index_range: None,
+                media_ranges: vec![(800, 1999), (2000, 3199)],
+            },
+        );
+        let mut m = Manifest::static_vod(12.0, vec![rep], None);
+        m.profile = DashProfile::OnDemand;
+        let xml = m.to_xml();
+        assert!(xml.contains("isoff-on-demand:2011"));
+        assert!(xml.contains("<BaseURL>rep_0.mp4</BaseURL>"));
+        assert!(xml.contains("<SegmentList"));
+        assert!(xml.contains("range=\"0-799\""));
+        assert!(xml.contains("mediaRange=\"800-1999\""));
+        assert!(xml.contains("mediaRange=\"2000-3199\""));
+        assert!(!xml.contains("SegmentTemplate"));
     }
 
     #[test]

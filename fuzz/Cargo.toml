@@ -1,0 +1,35 @@
+[package]
+name = "sheathe-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+sheathe-mp4 = { path = "../crates/sheathe-mp4" }
+sheathe-ts = { path = "../crates/sheathe-ts" }
+sheathe-mkv = { path = "../crates/sheathe-mkv" }
+
+[[bin]]
+name = "mp4_box_reader"
+path = "fuzz_targets/mp4_box_reader.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ts_packet"
+path = "fuzz_targets/ts_packet.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mkv_ebml"
+path = "fuzz_targets/mkv_ebml.rs"
+test = false
+doc = false
+bench = false

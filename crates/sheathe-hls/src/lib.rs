@@ -453,6 +453,35 @@ pub fn media_playlist(init_uri: &str, segments: &[SegmentRef], key: Option<&KeyI
     MediaPlaylist::vod(init_uri, segments.to_vec(), key.cloned()).to_m3u8()
 }
 
+/// Build a **packed-audio** media playlist (raw AAC/AC-3 elementary segments).
+///
+/// Unlike the fMP4 path there is no `#EXT-X-MAP`; each segment is a self-
+/// contained ADTS/AC-3 burst. Used for audio-only HLS delivery.
+pub fn packed_audio_playlist(segments: &[SegmentRef], key: Option<&KeyInfo>) -> String {
+    let target = segments.iter().map(|s| s.duration).fold(0.0_f64, f64::max).ceil().max(1.0) as u64;
+    let mut s = String::from("#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-PLAYLIST-TYPE:VOD\n");
+    let _ = writeln!(s, "#EXT-X-TARGETDURATION:{target}");
+    s.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
+    if let Some(k) = key {
+        let _ = writeln!(
+            s,
+            "#EXT-X-KEY:METHOD={},URI=\"{}\",KEYFORMAT=\"{}\",KEYFORMATVERSIONS=\"1\"",
+            k.method, k.uri, k.key_format
+        );
+    }
+    for seg in segments {
+        let _ = writeln!(s, "#EXTINF:{:.3},\n{}", seg.duration, seg.uri);
+    }
+    s.push_str("#EXT-X-ENDLIST\n");
+    s
+}
+
+/// Build an MPEG-TS media playlist (`#EXT-X-VERSION:3`, no MAP).
+pub fn ts_media_playlist(segments: &[SegmentRef], key: Option<&KeyInfo>) -> String {
+    // Same shape as packed audio — TS segments are self-initialising.
+    packed_audio_playlist(segments, key)
+}
+
 /// Build an I-frame-only (trick-play) media playlist.
 ///
 /// Segments are expected to contain only IDR/keyframe samples. Emits

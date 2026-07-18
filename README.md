@@ -16,16 +16,13 @@ built and validated against it as the reference oracle.
 
 📖 **Read the story:** [Packaging the World's Video in Pure Rust](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
 
-> Status: **working VOD + live/advanced packaging + encryption + a broad input
-> matrix.** `probe` and `package` demux MP4, MPEG-TS, raw elementary streams,
-> and WebM/Matroska, then write playable CMAF segments + DASH/HLS manifests with
-> correct codec strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3,
-> E-AC-3, MP3, FLAC, Opus. Text: WebVTT, plus CEA-608/708 caption extraction.
-> Encryption covers all four CENC schemes (`cenc`/`cens`/`cbc1`/`cbcs`) with
-> multi-DRM `pssh` and key rotation. Phase 4 adds dynamic DASH, live/EVENT HLS
-> (sliding window), multi-period DASH, trick-play, LL-HLS/LL-DASH, and SCTE-35
-> markers. Remaining Shaka surface (IO backends, on-demand `SegmentBase`, JIT
-> origin) is Phase 5 — see [`ROADMAP.md`](./ROADMAP.md).
+> Status: **Phases 0–5 complete** — VOD + live/advanced manifests + on-demand
+> single-file DASH, CMAF/TS/packed-audio segments, encryption, broad inputs, HTTP
+> push, UDP ingest, and a JIT origin. `probe` / `package` / `origin` demux MP4,
+> MPEG-TS, WebM/Matroska, and elementary streams; write DASH/HLS with correct
+> codec strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3, E-AC-3,
+> MP3, FLAC, Opus. Text: WebVTT + CEA-608/708. CENC matrix + multi-DRM `pssh`.
+> See [`ROADMAP.md`](./ROADMAP.md) and [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
 
 ## Why
 
@@ -39,7 +36,7 @@ segment → DASH/HLS manifests, with no C/C++ dependencies.
 | ------- | ------ | ------------------------- |
 | [`sheathe-core`](crates/sheathe-core)     | Media model: streams, samples, timing, errors | `media/base` |
 | [`sheathe-mp4`](crates/sheathe-mp4)       | ISO-BMFF / fMP4 / CMAF box writing + fragmentation | `media/formats/mp4` + chunking |
-| [`sheathe-ts`](crates/sheathe-ts)         | MPEG-2 TS demux (PAT/PMT/PES) + audio codec parsers (AAC/AC-3/E-AC-3/MP3/FLAC) | `media/formats/mpeg` |
+| [`sheathe-ts`](crates/sheathe-ts)         | MPEG-2 TS demux + mux (PAT/PMT/PES) + audio parsers (AAC/AC-3/E-AC-3/MP3/FLAC) | `media/formats/mpeg` |
 | [`sheathe-es`](crates/sheathe-es)         | Raw elementary stream demux (Annex B, ADTS, AC-3/E-AC-3, MP3, FLAC) | `media/formats` |
 | [`sheathe-mkv`](crates/sheathe-mkv)       | WebM/Matroska (EBML) demux — VP8/VP9/AV1 + Opus | `media/formats/webm` |
 | [`sheathe-text`](crates/sheathe-text)     | Timed text: WebVTT input + CEA-608 caption extraction → `wvtt` | `media/formats/webvtt` |

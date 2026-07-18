@@ -46,6 +46,22 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ### Added
 
+- **Phase 5 — Output formats, IO, operations**
+  - **DASH on-demand** (`--on-demand`): single-file `rep_N.mp4` with
+    `isoff-on-demand` profile, `BaseURL` + `SegmentList` byte ranges.
+  - **MPEG-TS mux** (`--format ts`): pure-Rust PAT/PMT/PES muxer in
+    `sheathe-ts::mux`; HLS media playlists without `#EXT-X-MAP`.
+  - **Packed-audio HLS** (`--format packed-audio`): elementary ADTS/AC-3
+    segments for audio-only delivery.
+  - **IO backends**: `FileSink`, pure-std `HttpPushSink` (`--http-push URL`),
+    `udp://host:port` ingest via `read_input`.
+  - **JIT origin**: `sheathe origin --bind 127.0.0.1:8787` packages on
+    `GET /package?input=…&format=hls|dash`.
+  - **Parallel packaging** (`--parallel`) and `just bench` throughput script
+    vs Shaka Packager.
+  - **Fuzz targets** under `fuzz/` + conformance guide
+    (`docs/CONFORMANCE.md`).
+
 - **Phase 4 — Live & advanced manifests**
   - **Dynamic DASH / live HLS**: `--presentation vod|event|live` with
     `availabilityStartTime`, `publishTime`, `minimumUpdatePeriod`,

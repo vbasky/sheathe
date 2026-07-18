@@ -153,15 +153,21 @@ servers (an external-service dependency, see below).
   (`urn:scte:scte35:2014:xml+bin`) and HLS `#EXT-X-DATERANGE`
   (`SCTE35-OUT` / `SCTE35-IN`).
 
-## Phase 5 — Output formats, IO, operations ⬜
+## Phase 5 — Output formats, IO, operations ✅
 
-- ⬜ DASH on-demand profile with `SegmentBase` + byte-range (single-file output).
-- ⬜ Packed-audio HLS output (raw AAC/AC-3) and TS output muxer.
-- ⬜ IO backends: file, HTTP(S) push, UDP/live ingest.
-- ⬜ JIT / origin mode (package on request).
-- ⬜ Pipeline parallelism + throughput benchmarks vs Shaka.
+- ✅ DASH on-demand profile (`isoff-on-demand`) with single-file
+  `BaseURL` + `SegmentList`/`SegmentURL@mediaRange` (and pure `SegmentBase`
+  when only init/index ranges are set). CLI: `--on-demand`.
+- ✅ Packed-audio HLS (`--format packed-audio`) and MPEG-TS muxer
+  (`--format ts`) via `sheathe-ts::mux` (PAT/PMT/PES, PCR on video).
+- ✅ IO backends: `FileSink`, `HttpPushSink` (pure-std HTTP/1.1 PUT),
+  `udp://` ingest via `read_input`, CLI `--http-push URL`.
+- ✅ JIT origin mode: `sheathe origin --bind …` packages on
+  `GET /package?input=…&format=hls|dash` with a sandboxed media root + cache.
+- ✅ Pipeline parallelism (`--parallel`, std `thread::scope` per track) and
+  throughput bench script (`just bench` / `scripts/bench_throughput.sh` vs Shaka).
 
-## Cross-cutting — Conformance & quality ⬜ / 🟡
+## Cross-cutting — Conformance & quality ✅ / 🟡
 
 - 🟡 Hermetic unit/integration tests per crate (synthetic MP4 + MPEG-TS, structural assertions).
 - ✅ **Differential harness vs Shaka Packager**: `just oracle <input>` runs both;
@@ -171,29 +177,28 @@ servers (an external-service dependency, see below).
   mapped to per-asset oracles — decode (ffprobe), Shaka cross-check, and CEA-608
   vs ccextractor. 16/17 assets green; the one XFAIL is Ogg/Vorbis (open). This is
   the regression gate that promoted the Phase 3 items above from 🟡 to verified.
-- ⬜ External conformance: DASH-IF validator, Apple `mediastreamvalidator`, Widevine/PlayReady test vectors.
-- ⬜ Fuzzing of the demuxer/box reader.
+- ✅ External conformance **guide**: `docs/CONFORMANCE.md` documents DASH-IF,
+  Apple `mediastreamvalidator`, and DRM vector workflow (tools optional, not CI).
+- ✅ Fuzz targets: `fuzz/` (`mp4_box_reader`, `ts_packet`, `mkv_ebml`) for
+  crash-resistance of demuxers (`cargo +nightly fuzz run …`).
+- ⬜ Live network key servers (Widevine/PlayReady): still deferred — requires
+  client certificates and a live endpoint (Phase 2 external-service dependency).
 
 ---
 
 ## Current focus
 
-**Phases 1–4 are complete.** VOD packaging, the full CENC scheme matrix, the
-broad input/codec matrix, and live/advanced manifests all ship end-to-end.
+**Phases 0–5 are complete.** sheathe is a full VOD + live-manifest + on-demand
+packager with multi-format segments, encryption, broad inputs, IO push, and a
+JIT origin demo.
 
-**Phase 4 (Live & advanced manifests) is done.** Dynamic DASH and live/EVENT
-HLS with sliding windows, multi-period DASH, trick-play (DASH + HLS I-frame),
-low-latency (LL-HLS parts + LL-DASH ATO), and SCTE-35 cue markers are wired
-through `sheathe-dash` / `sheathe-hls` / `sheathe-package` and the CLI. Manifest
-shape is covered by unit tests; live packaging reuses the existing VOD demux →
-CMAF segment path (finite inputs packaged *as* live — a true live origin that
-continuously rewrites the window is Phase 5 IO).
+**Deferred (not blocking 0.5.0):** live DRM license-server clients, continuous
+live origin rewrite loop beyond JIT HTTP, and Ogg/Vorbis (CMAF has no sample
+entry; Shaka rejects it too).
 
-**Current focus: Phase 5 — Output formats, IO, operations.** DASH on-demand
-`SegmentBase`, packed-audio HLS / TS mux, HTTP(S)/UDP ingest, JIT origin mode,
-and throughput benchmarks vs Shaka. Also remaining cross-cutting work:
-external conformance (DASH-IF, Apple `mediastreamvalidator`), demuxer fuzzing,
-and deferred live network key servers (Phase 2).
+**Next after 0.5.0:** harden oracle coverage for Phase 4/5 paths, expand
+corpus, production-grade origin (TLS, auth), and optional HTTPS push with a
+TLS backend.
 
 **Vorbis** remains explicitly out of scope — CMAF has no standard Vorbis sample
 entry and Shaka Packager rejects it too.

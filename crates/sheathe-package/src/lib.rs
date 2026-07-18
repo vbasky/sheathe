@@ -12,7 +12,12 @@
 //! Phase 4 (live & advanced manifests) is controlled via
 //! [`PresentationMode`], live window size, trick-play, low-latency parts, and
 //! SCTE-35 markers.
+//!
+//! Phase 5 adds on-demand single-file DASH, packed-audio / MPEG-TS HLS, IO
+//! backends, JIT origin, and multi-track parallelism.
 
+pub mod io;
+pub mod origin;
 mod scte35;
 
 use anyhow::{Context, Result};
@@ -20,24 +25,39 @@ use sheathe_core::Sample;
 use sheathe_core::{MediaKind, Scaled, StreamInfo};
 use sheathe_crypto::{ContentKey, Scheme};
 use sheathe_dash::{
-    DashEvent, EventStream, Manifest, MpdType, Period, Protection, Representation, UtcTiming,
+    DashEvent, DashProfile, EventStream, Manifest, MpdType, Period, Protection, Representation,
+    SegmentBaseInfo, UtcTiming,
 };
 use sheathe_es::{EsDemuxer, is_mp4};
 use sheathe_hls::{
     DateRange, KeyInfo, MediaPlaylist, PartialSegment, SegmentRef, Variant, iframe_playlist,
-    master_playlist,
+    master_playlist, packed_audio_playlist, ts_media_playlist,
 };
 use sheathe_mp4::{
     Encryption, Fragmenter, Mp4Demuxer, Segment, SegmentPolicy, Track, write_init_segment,
     write_media_segment,
 };
-use sheathe_ts::{TsDemuxer, packet::PACKET_SIZE};
+use sheathe_ts::{MuxTrack, PID_AUDIO, PID_VIDEO, TsDemuxer, mux_segment, packet::PACKET_SIZE};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use io::{FileSink, HttpPushSink, ObjectSink, read_input};
+pub use origin::{OriginConfig, serve as serve_origin};
 pub use scte35::{Scte35Marker, build_splice_insert, to_base64, to_hex_0x};
 pub use sheathe_crypto::{ProtectionSystem as DrmSystem, Scheme as EncScheme};
+
+/// Container / segment format for packaged media.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SegmentFormat {
+    /// CMAF fMP4 init + `.m4s` media (default).
+    #[default]
+    Cmaf,
+    /// MPEG-TS segments (`.ts`) for HLS.
+    MpegTs,
+    /// Packed elementary audio segments (ADTS/AC-3) for audio-only HLS.
+    PackedAudio,
+}
 
 /// How the presentation should be signalled in DASH/HLS manifests.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -82,6 +102,14 @@ pub struct PackageOptions {
     pub availability_start_time: Option<String>,
     /// SCTE-35 ad markers to inject into manifests.
     pub scte35_markers: Vec<Scte35Marker>,
+    /// Segment container format (CMAF / MPEG-TS / packed audio).
+    pub segment_format: SegmentFormat,
+    /// DASH on-demand single-file output (`SegmentList` byte ranges).
+    pub on_demand: bool,
+    /// Parallelise per-track packaging with a thread pool (std threads).
+    pub parallel: bool,
+    /// Optional HTTP base URL for push after local write (`http://host/path`).
+    pub http_push_url: Option<String>,
 }
 
 impl Default for PackageOptions {
@@ -100,6 +128,10 @@ impl Default for PackageOptions {
             part_duration: None,
             availability_start_time: None,
             scte35_markers: Vec::new(),
+            segment_format: SegmentFormat::Cmaf,
+            on_demand: false,
+            parallel: false,
+            http_push_url: None,
         }
     }
 }
@@ -154,6 +186,14 @@ struct PackagedRendition {
     period_index: usize,
     /// Trick-play companion (I-frame only), if any.
     trick: Option<TrickRendition>,
+    /// On-demand single-file bytes + ranges (when `on_demand`).
+    on_demand_file: Option<OnDemandFile>,
+}
+
+struct OnDemandFile {
+    file_name: String,
+    init_range: (u64, u64),
+    media_ranges: Vec<(u64, u64)>,
 }
 
 struct TrickRendition {
@@ -210,13 +250,21 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
     // Per-input duration for multi-period starts.
     let mut period_durations: Vec<f64> = Vec::new();
 
-    for (input_idx, input) in loaded.iter().enumerate() {
-        let period_index = if opts.multi_period { input_idx } else { 0 };
-        let mut input_seconds = 0.0_f64;
+    // Build work items (input, track) so we can optionally parallelise.
+    let mut work: Vec<(usize, usize)> = Vec::new(); // (input_idx, track_idx)
+    for (ii, input) in loaded.iter().enumerate() {
+        for ti in 0..input.tracks.len() {
+            work.push((ii, ti));
+        }
+    }
 
-        for lt in &input.tracks {
+    let package_one =
+        |input_idx: usize, track_idx: usize, rep: usize| -> Result<PackagedRendition> {
+            let input = &loaded[input_idx];
+            let lt = &input.tracks[track_idx];
             let track = &lt.track;
             let samples = &lt.samples;
+            let period_index = if opts.multi_period { input_idx } else { 0 };
             let mut frag = Fragmenter::new(track.info.clone(), policy);
             for s in samples.iter().cloned() {
                 frag.push(s)?;
@@ -224,83 +272,99 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
             let segments = frag.finish();
             let ts = track.info.timescale;
 
-            let init_name = format!("init_{rep}.mp4");
-            fs::write(out_dir.join(&init_name), write_init_segment(track, encryption.as_ref()))
-                .with_context(|| format!("writing {init_name}"))?;
-            init_segments.push(out_dir.join(&init_name));
-
-            let mut durations = Vec::with_capacity(segments.len());
-            let mut hls_segs = Vec::with_capacity(segments.len());
-            let mut sample_index = 0u64;
-            for (n, seg) in segments.iter().enumerate() {
-                let seg_name = format!("seg_{rep}_{}.m4s", n + 1);
-                let data = write_media_segment(
-                    track,
-                    (n + 1) as u32,
-                    seg,
-                    sample_index,
-                    encryption.as_ref(),
-                );
-                fs::write(out_dir.join(&seg_name), data)
-                    .with_context(|| format!("writing {seg_name}"))?;
-                media_segments.push(out_dir.join(&seg_name));
-                sample_index += seg.samples.len() as u64;
-                durations.push(seg.duration_ticks);
-
-                let mut href = SegmentRef::new(
-                    Scaled::new(seg.duration_ticks, ts).seconds(),
-                    seg_name.clone(),
-                );
-                if opts.low_latency && track.info.kind == MediaKind::Video {
-                    href.parts = write_ll_parts(
-                        out_dir,
-                        track,
-                        rep,
-                        n + 1,
-                        seg,
-                        sample_index - seg.samples.len() as u64,
-                        encryption.as_ref(),
-                        part_dur,
-                        &mut media_segments,
-                    )?;
-                }
-                hls_segs.push(href);
-            }
-
-            let track_total: u64 = segments.iter().map(|s| s.duration_ticks).sum();
-            let track_seconds = Scaled::new(track_total, ts).seconds();
-            total_seconds = total_seconds.max(track_seconds);
-            input_seconds = input_seconds.max(track_seconds);
-
-            let trick = if opts.trick_play && track.info.kind == MediaKind::Video {
-                Some(write_trick_play(
+            match opts.segment_format {
+                SegmentFormat::Cmaf => package_cmaf_rendition(
                     out_dir,
                     track,
                     samples,
+                    &segments,
                     rep,
+                    period_index,
                     encryption.as_ref(),
-                    &mut init_segments,
-                    &mut media_segments,
-                )?)
-            } else {
-                None
-            };
+                    opts,
+                    part_dur,
+                ),
+                SegmentFormat::MpegTs => {
+                    package_ts_rendition(out_dir, track, samples, &segments, rep, period_index)
+                }
+                SegmentFormat::PackedAudio => {
+                    package_packed_audio(out_dir, track, samples, &segments, rep, period_index)
+                }
+            }
+            .map(|mut r| {
+                let track_total: u64 = r.all_durations.iter().sum();
+                let _ = Scaled::new(track_total, ts).seconds(); // keep timing consistent
+                r.period_index = period_index;
+                r
+            })
+        };
 
-            renditions.push(PackagedRendition {
-                stream: track.info.clone(),
-                init_name,
-                media_template: format!("seg_{rep}_$Number$.m4s"),
-                timescale: ts.0,
-                all_durations: durations,
-                all_hls_segs: hls_segs,
-                period_index,
-                trick,
-            });
+    if opts.parallel && work.len() > 1 {
+        use std::sync::Mutex;
+        let results = Mutex::new(Vec::new());
+        let errors = Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for (i, (ii, ti)) in work.iter().enumerate() {
+                let results = &results;
+                let errors = &errors;
+                scope.spawn(move || match package_one(*ii, *ti, i) {
+                    Ok(r) => results.lock().unwrap().push((i, r)),
+                    Err(e) => errors.lock().unwrap().push(format!("{e:#}")),
+                });
+            }
+        });
+        let errs = errors.into_inner().unwrap();
+        if let Some(e) = errs.first() {
+            anyhow::bail!("parallel package failed: {e}");
+        }
+        let mut got = results.into_inner().unwrap();
+        got.sort_by_key(|(i, _)| *i);
+        for (_, r) in got {
+            let track_total: u64 = r.all_durations.iter().sum();
+            let track_seconds =
+                Scaled::new(track_total, sheathe_core::Timescale(r.timescale)).seconds();
+            total_seconds = total_seconds.max(track_seconds);
+            if opts.multi_period {
+                while period_durations.len() <= r.period_index {
+                    period_durations.push(0.0);
+                }
+                period_durations[r.period_index] =
+                    period_durations[r.period_index].max(track_seconds);
+            }
+            if r.init_name.ends_with(".mp4") || r.init_name.ends_with(".ts") {
+                init_segments.push(out_dir.join(&r.init_name));
+            }
+            for s in &r.all_hls_segs {
+                media_segments.push(out_dir.join(&s.uri));
+            }
+            renditions.push(r);
             rep += 1;
         }
-
-        if opts.multi_period {
-            period_durations.push(input_seconds);
+    } else {
+        for (i, (ii, ti)) in work.iter().enumerate() {
+            let r = package_one(*ii, *ti, i)?;
+            let track_total: u64 = r.all_durations.iter().sum();
+            let track_seconds =
+                Scaled::new(track_total, sheathe_core::Timescale(r.timescale)).seconds();
+            total_seconds = total_seconds.max(track_seconds);
+            if opts.multi_period {
+                while period_durations.len() <= r.period_index {
+                    period_durations.push(0.0);
+                }
+                period_durations[r.period_index] =
+                    period_durations[r.period_index].max(track_seconds);
+            }
+            if !r.init_name.is_empty() {
+                init_segments.push(out_dir.join(&r.init_name));
+            }
+            for s in &r.all_hls_segs {
+                media_segments.push(out_dir.join(&s.uri));
+            }
+            if let Some(od) = &r.on_demand_file {
+                media_segments.push(out_dir.join(&od.file_name));
+            }
+            renditions.push(r);
+            rep += 1;
         }
     }
 
@@ -337,6 +401,44 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
         let path = out_dir.join("master.m3u8");
         fs::write(&path, master_playlist(&variants)).context("writing master.m3u8")?;
         hls_master = Some(path);
+    }
+
+    // HTTP push of all written objects (after manifests exist).
+    if let Some(url) = &opts.http_push_url {
+        let mut sink = HttpPushSink::new(url);
+        let mut paths: Vec<PathBuf> =
+            init_segments.iter().chain(media_segments.iter()).cloned().collect();
+        if let Some(p) = &dash_manifest {
+            paths.push(p.clone());
+        }
+        if let Some(p) = &hls_master {
+            paths.push(p.clone());
+            // Also push per-track media playlists.
+            for r in &renditions {
+                let id = r
+                    .init_name
+                    .trim_start_matches("init_")
+                    .trim_end_matches(".mp4")
+                    .trim_end_matches(".ts");
+                let media_name = if r.init_name.is_empty() {
+                    // packed audio uses media_{rep}.m3u8 from segment names
+                    continue;
+                } else {
+                    format!("media_{id}.m3u8")
+                };
+                let mp = out_dir.join(&media_name);
+                if mp.exists() {
+                    paths.push(mp);
+                }
+            }
+        }
+        for p in paths {
+            if let Ok(data) = fs::read(&p) {
+                let rel =
+                    p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                sink.put(&rel, &data)?;
+            }
+        }
     }
 
     Ok(PackageOutput {
@@ -406,19 +508,36 @@ fn build_dash_manifest(
             let pto: u64 = r.all_durations[..start_idx].iter().sum();
             let ato =
                 if opts.low_latency { Some(opts.part_duration.unwrap_or(1.0) * 3.0) } else { None };
-            let rep_id = r.init_name[5..r.init_name.len() - 4].to_string();
-            let mut rep = Representation::new(
-                rep_id.clone(),
-                r.stream.clone(),
-                r.init_name.clone(),
-                r.media_template.clone(),
-                r.timescale,
-                durs,
-            );
-            rep.start_number = start_number;
-            rep.presentation_time_offset = pto;
-            rep.availability_time_offset = ato;
-            representations.push(rep);
+            let rep_id = rep_id_from_init(&r.init_name);
+
+            if let Some(od) = &r.on_demand_file {
+                let rep = Representation::on_demand(
+                    rep_id.clone(),
+                    r.stream.clone(),
+                    r.timescale,
+                    durs,
+                    SegmentBaseInfo {
+                        base_url: od.file_name.clone(),
+                        init_range: od.init_range,
+                        index_range: None,
+                        media_ranges: od.media_ranges.clone(),
+                    },
+                );
+                representations.push(rep);
+            } else {
+                let mut rep = Representation::new(
+                    rep_id.clone(),
+                    r.stream.clone(),
+                    r.init_name.clone(),
+                    r.media_template.clone(),
+                    r.timescale,
+                    durs,
+                );
+                rep.set_start_number(start_number);
+                rep.set_presentation_time_offset(pto);
+                rep.set_availability_time_offset(ato);
+                representations.push(rep);
+            }
 
             if let Some(trick) = &r.trick {
                 let (t_start, t_durs) = window_slice(&trick.all_durations, window);
@@ -430,8 +549,8 @@ fn build_dash_manifest(
                     r.timescale,
                     t_durs,
                 );
-                trep.start_number = t_start as u32 + 1;
-                trep.presentation_time_offset = trick.all_durations[..t_start].iter().sum();
+                trep.set_start_number(t_start as u32 + 1);
+                trep.set_presentation_time_offset(trick.all_durations[..t_start].iter().sum());
                 trep.max_playout_rate = Some(8.0);
                 representations.push(trep);
             }
@@ -457,9 +576,11 @@ fn build_dash_manifest(
         }
     }
 
+    let profile = if opts.on_demand { DashProfile::OnDemand } else { DashProfile::Live };
     match opts.presentation {
         PresentationMode::Vod => Manifest {
             mpd_type: MpdType::Static,
+            profile,
             duration_seconds: Some(if opts.multi_period {
                 period_durations.iter().sum()
             } else {
@@ -474,6 +595,7 @@ fn build_dash_manifest(
                 window.map(|w| w as f64 * opts.segment_duration).unwrap_or(total_seconds);
             Manifest {
                 mpd_type: MpdType::Dynamic,
+                profile: DashProfile::Live,
                 duration_seconds: None,
                 availability_start_time: Some(avail_start.to_string()),
                 publish_time: Some(publish_time.to_string()),
@@ -490,6 +612,14 @@ fn build_dash_manifest(
             }
         }
     }
+}
+
+fn rep_id_from_init(init_name: &str) -> String {
+    init_name
+        .trim_start_matches("init_")
+        .trim_end_matches(".mp4")
+        .trim_end_matches(".ts")
+        .to_string()
 }
 
 fn scte35_event_streams(markers: &[Scte35Marker], timescale: u32) -> Vec<EventStream> {
@@ -528,19 +658,47 @@ fn write_hls_playlists(
     for r in renditions {
         let (start_idx, segs) = window_slice(&r.all_hls_segs, window);
         let media_sequence = start_idx as u64;
-        // init name is init_{id}.mp4 — extract id
-        let id = &r.init_name[5..r.init_name.len() - 4];
+        let id = if r.init_name.is_empty() {
+            // packed-audio / TS: derive from first segment name or rep index.
+            r.all_hls_segs.first().and_then(|s| s.uri.split('_').nth(1)).unwrap_or("0").to_string()
+        } else {
+            rep_id_from_init(&r.init_name)
+        };
         let media_name = format!("media_{id}.m3u8");
 
-        let mut pl = match opts.presentation {
-            PresentationMode::Vod => MediaPlaylist::vod(&r.init_name, segs, hls_key.cloned()),
-            PresentationMode::Event => {
-                MediaPlaylist::event(&r.init_name, segs, hls_key.cloned(), false)
-            }
-            PresentationMode::Live => {
-                MediaPlaylist::live(&r.init_name, media_sequence, segs, hls_key.cloned())
-            }
-        };
+        let use_map = matches!(opts.segment_format, SegmentFormat::Cmaf) && !r.init_name.is_empty();
+        let mut pl =
+            if matches!(opts.segment_format, SegmentFormat::MpegTs | SegmentFormat::PackedAudio) {
+                // Self-initialising segments — no MAP.
+                let text = match opts.segment_format {
+                    SegmentFormat::MpegTs => ts_media_playlist(&segs, hls_key),
+                    SegmentFormat::PackedAudio => packed_audio_playlist(&segs, hls_key),
+                    SegmentFormat::Cmaf => unreachable!(),
+                };
+                fs::write(out_dir.join(&media_name), text)
+                    .with_context(|| format!("writing {media_name}"))?;
+                variants.push(Variant {
+                    stream: r.stream.clone(),
+                    playlist_uri: media_name,
+                    iframe_playlist_uri: None,
+                });
+                continue;
+            } else {
+                match opts.presentation {
+                    PresentationMode::Vod => {
+                        MediaPlaylist::vod(&r.init_name, segs, hls_key.cloned())
+                    }
+                    PresentationMode::Event => {
+                        MediaPlaylist::event(&r.init_name, segs, hls_key.cloned(), false)
+                    }
+                    PresentationMode::Live => {
+                        MediaPlaylist::live(&r.init_name, media_sequence, segs, hls_key.cloned())
+                    }
+                }
+            };
+        if !use_map {
+            pl.init_uri = None;
+        }
         // Only signal LL-HLS tags when this rendition actually has parts
         // (video tracks under --low-latency).
         let has_parts = pl.segments.iter().any(|s| !s.parts.is_empty());
@@ -604,6 +762,188 @@ fn scte35_dateranges(markers: &[Scte35Marker], avail_start: &str) -> Vec<DateRan
             }
         })
         .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn package_cmaf_rendition(
+    out_dir: &Path,
+    track: &Track,
+    samples: &[Sample],
+    segments: &[Segment],
+    rep: usize,
+    period_index: usize,
+    encryption: Option<&Encryption>,
+    opts: &PackageOptions,
+    part_dur: f64,
+) -> Result<PackagedRendition> {
+    let ts = track.info.timescale;
+    let init_bytes = write_init_segment(track, encryption);
+    let init_name = format!("init_{rep}.mp4");
+    fs::write(out_dir.join(&init_name), &init_bytes)
+        .with_context(|| format!("writing {init_name}"))?;
+
+    let mut durations = Vec::with_capacity(segments.len());
+    let mut hls_segs = Vec::with_capacity(segments.len());
+    let mut sample_index = 0u64;
+    let mut media_blobs: Vec<Vec<u8>> = Vec::new();
+    let mut media_segments_paths = Vec::new();
+
+    for (n, seg) in segments.iter().enumerate() {
+        let seg_name = format!("seg_{rep}_{}.m4s", n + 1);
+        let data = write_media_segment(track, (n + 1) as u32, seg, sample_index, encryption);
+        if opts.on_demand {
+            media_blobs.push(data);
+        } else {
+            fs::write(out_dir.join(&seg_name), &data)
+                .with_context(|| format!("writing {seg_name}"))?;
+            media_segments_paths.push(seg_name.clone());
+        }
+        sample_index += seg.samples.len() as u64;
+        durations.push(seg.duration_ticks);
+
+        let mut href =
+            SegmentRef::new(Scaled::new(seg.duration_ticks, ts).seconds(), seg_name.clone());
+        if opts.low_latency && track.info.kind == MediaKind::Video && !opts.on_demand {
+            let mut paths = Vec::new();
+            href.parts = write_ll_parts(
+                out_dir,
+                track,
+                rep,
+                n + 1,
+                seg,
+                sample_index - seg.samples.len() as u64,
+                encryption,
+                part_dur,
+                &mut paths,
+            )?;
+        }
+        hls_segs.push(href);
+        let _ = media_segments_paths;
+    }
+
+    let on_demand_file = if opts.on_demand {
+        let mut bytes = init_bytes;
+        let init_end = (bytes.len() as u64).saturating_sub(1);
+        let mut media_ranges = Vec::new();
+        for blob in media_blobs {
+            let start = bytes.len() as u64;
+            bytes.extend_from_slice(&blob);
+            let end = (bytes.len() as u64).saturating_sub(1);
+            media_ranges.push((start, end));
+        }
+        let file_name = format!("rep_{rep}.mp4");
+        fs::write(out_dir.join(&file_name), &bytes)
+            .with_context(|| format!("writing {file_name}"))?;
+        // Point HLS at the single file via byte-range is not standard in our
+        // simple playlist — keep multi-seg names for HLS off when on_demand.
+        Some(OnDemandFile { file_name, init_range: (0, init_end), media_ranges })
+    } else {
+        None
+    };
+
+    let trick = if opts.trick_play && track.info.kind == MediaKind::Video && !opts.on_demand {
+        let mut init_segs = Vec::new();
+        let mut media_segs = Vec::new();
+        Some(write_trick_play(
+            out_dir,
+            track,
+            samples,
+            rep,
+            encryption,
+            &mut init_segs,
+            &mut media_segs,
+        )?)
+    } else {
+        None
+    };
+
+    Ok(PackagedRendition {
+        stream: track.info.clone(),
+        init_name,
+        media_template: format!("seg_{rep}_$Number$.m4s"),
+        timescale: ts.0,
+        all_durations: durations,
+        all_hls_segs: hls_segs,
+        period_index,
+        trick,
+        on_demand_file,
+    })
+}
+
+fn package_ts_rendition(
+    out_dir: &Path,
+    track: &Track,
+    _samples: &[Sample],
+    segments: &[Segment],
+    rep: usize,
+    period_index: usize,
+) -> Result<PackagedRendition> {
+    let ts = track.info.timescale;
+    let pid = if track.info.kind == MediaKind::Video { PID_VIDEO } else { PID_AUDIO };
+    let mut durations = Vec::new();
+    let mut hls_segs = Vec::new();
+    for (n, seg) in segments.iter().enumerate() {
+        let mux_track = MuxTrack { info: track.info.clone(), pid, samples: seg.samples.clone() };
+        let data = mux_segment(&mux_track);
+        let seg_name = format!("seg_{rep}_{}.ts", n + 1);
+        fs::write(out_dir.join(&seg_name), data).with_context(|| format!("writing {seg_name}"))?;
+        durations.push(seg.duration_ticks);
+        hls_segs.push(SegmentRef::new(Scaled::new(seg.duration_ticks, ts).seconds(), seg_name));
+    }
+    Ok(PackagedRendition {
+        stream: track.info.clone(),
+        init_name: String::new(),
+        media_template: format!("seg_{rep}_$Number$.ts"),
+        timescale: ts.0,
+        all_durations: durations,
+        all_hls_segs: hls_segs,
+        period_index,
+        trick: None,
+        on_demand_file: None,
+    })
+}
+
+fn package_packed_audio(
+    out_dir: &Path,
+    track: &Track,
+    _samples: &[Sample],
+    segments: &[Segment],
+    rep: usize,
+    period_index: usize,
+) -> Result<PackagedRendition> {
+    anyhow::ensure!(
+        track.info.kind == MediaKind::Audio,
+        "packed-audio format requires an audio track"
+    );
+    let ts = track.info.timescale;
+    let mut durations = Vec::new();
+    let mut hls_segs = Vec::new();
+    for (n, seg) in segments.iter().enumerate() {
+        // Concatenate sample payloads — ADTS/AC-3 frames are already framed.
+        let mut data = Vec::new();
+        for s in &seg.samples {
+            data.extend_from_slice(&s.data);
+        }
+        let ext = match track.info.codec {
+            sheathe_core::Codec::Ac3 | sheathe_core::Codec::Eac3 => "ac3",
+            _ => "aac",
+        };
+        let seg_name = format!("seg_{rep}_{n}.{ext}");
+        fs::write(out_dir.join(&seg_name), data).with_context(|| format!("writing {seg_name}"))?;
+        durations.push(seg.duration_ticks);
+        hls_segs.push(SegmentRef::new(Scaled::new(seg.duration_ticks, ts).seconds(), seg_name));
+    }
+    Ok(PackagedRendition {
+        stream: track.info.clone(),
+        init_name: String::new(),
+        media_template: format!("seg_{rep}_$Number$"),
+        timescale: ts.0,
+        all_durations: durations,
+        all_hls_segs: hls_segs,
+        period_index,
+        trick: None,
+        on_demand_file: None,
+    })
 }
 
 /// Write keyframe-only trick-play segments for a video track.
