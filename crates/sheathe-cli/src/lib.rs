@@ -10,8 +10,10 @@
 mod banner;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
-use sheathe_package::{DrmSystem, EncScheme, EncryptionSpec, PackageOptions};
+use clap::{Parser, Subcommand, ValueEnum};
+use sheathe_package::{
+    DrmSystem, EncScheme, EncryptionSpec, PackageOptions, PresentationMode, Scte35Marker,
+};
 use std::path::{Path, PathBuf};
 
 /// Pure-Rust HLS/DASH/CMAF media packager.
@@ -31,57 +33,105 @@ struct Cli {
     command: Command,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliPresentation {
+    Vod,
+    Event,
+    Live,
+}
+
+impl From<CliPresentation> for PresentationMode {
+    fn from(p: CliPresentation) -> Self {
+        match p {
+            CliPresentation::Vod => PresentationMode::Vod,
+            CliPresentation::Event => PresentationMode::Event,
+            CliPresentation::Live => PresentationMode::Live,
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Package one or more inputs into CMAF segments + DASH and/or HLS
-    /// manifests. Multiple inputs form an ABR ladder (one rendition each).
-    Package {
-        /// Input media file(s). Each becomes its own rendition(s).
-        #[arg(required = true, num_args = 1..)]
-        inputs: Vec<String>,
-        /// Output directory.
-        #[arg(short, long, default_value = "out")]
-        out: String,
-        /// Target segment duration in seconds.
-        #[arg(long, default_value_t = 6.0)]
-        segment_duration: f64,
-        /// Emit a DASH manifest (`manifest.mpd`).
-        #[arg(long)]
-        dash: bool,
-        /// Emit HLS playlists (`master.m3u8`).
-        #[arg(long)]
-        hls: bool,
-        /// Encrypt using a raw key, as `<KID hex>:<KEY hex>` (both 16 bytes /
-        /// 32 hex chars).
-        #[arg(long, value_name = "KID:KEY")]
-        enc_key: Option<String>,
-        /// Read the raw key from a file (a `<KID hex>:<KEY hex>` line; `#`
-        /// comments and blank lines ignored). Takes precedence over `--enc-key`
-        /// and keeps the key out of the process arguments.
-        #[arg(long, value_name = "PATH")]
-        enc_key_file: Option<String>,
-        /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR),
-        /// `cens` (AES-CTR pattern), `cbc1` (AES-CBC) or `cbcs` (AES-CBC pattern).
-        #[arg(long, default_value = "cenc")]
-        enc_scheme: String,
-        /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
-        #[arg(long, default_value = "key.bin")]
-        enc_key_uri: String,
-        /// DRM systems to emit `pssh` boxes for (comma-separated): any of
-        /// `common`, `widevine`, `playready`.
-        #[arg(long, default_value = "common")]
-        protection_systems: String,
-        /// Enable key rotation with this crypto-period duration in seconds. Each
-        /// period uses a key derived from the base key; signalled per segment via
-        /// `seig` sample groups and per-period `pssh`.
-        #[arg(long, value_name = "SECONDS")]
-        crypto_period_duration: Option<f64>,
-    },
+    /// manifests. Multiple inputs form an ABR ladder (one rendition each),
+    /// unless `--multi-period` is set.
+    Package(Box<PackageArgs>),
     /// Probe an input and print the streams sheathe detects.
     Probe {
         /// Input media file.
         input: String,
     },
+}
+
+/// Arguments for `sheathe package` (boxed in [`Command`] to keep the enum small).
+#[derive(Debug, Parser)]
+struct PackageArgs {
+    /// Input media file(s). Each becomes its own rendition(s).
+    #[arg(required = true, num_args = 1..)]
+    inputs: Vec<String>,
+    /// Output directory.
+    #[arg(short, long, default_value = "out")]
+    out: String,
+    /// Target segment duration in seconds.
+    #[arg(long, default_value_t = 6.0)]
+    segment_duration: f64,
+    /// Emit a DASH manifest (`manifest.mpd`).
+    #[arg(long)]
+    dash: bool,
+    /// Emit HLS playlists (`master.m3u8`).
+    #[arg(long)]
+    hls: bool,
+    /// Presentation mode: `vod` (default), `event`, or `live`.
+    #[arg(long, value_enum, default_value_t = CliPresentation::Vod)]
+    presentation: CliPresentation,
+    /// Live/event sliding-window size in segments (default: 3 for live).
+    #[arg(long, value_name = "N")]
+    live_window: Option<usize>,
+    /// Treat each input as a successive DASH Period instead of an ABR ladder.
+    #[arg(long)]
+    multi_period: bool,
+    /// Emit trick-play (I-frame) tracks / playlists for video.
+    #[arg(long)]
+    trick_play: bool,
+    /// Low-latency packaging (LL-HLS parts + LL-DASH availabilityTimeOffset).
+    #[arg(long)]
+    low_latency: bool,
+    /// Part target duration in seconds when `--low-latency` is set (default 1).
+    #[arg(long, value_name = "SECONDS")]
+    part_duration: Option<f64>,
+    /// Wall-clock availability start (ISO-8601, e.g. `2026-07-18T00:00:00Z`).
+    /// Defaults to now for live/event.
+    #[arg(long, value_name = "ISO8601")]
+    availability_start_time: Option<String>,
+    /// SCTE-35 marker as `TIME[:out|in][:BREAK_DUR]`. TIME is seconds from
+    /// period start. Repeatable. Example: `--scte35 30:out:15 --scte35 45:in`.
+    #[arg(long = "scte35", value_name = "SPEC", action = clap::ArgAction::Append)]
+    scte35: Vec<String>,
+    /// Encrypt using a raw key, as `<KID hex>:<KEY hex>` (both 16 bytes /
+    /// 32 hex chars).
+    #[arg(long, value_name = "KID:KEY")]
+    enc_key: Option<String>,
+    /// Read the raw key from a file (a `<KID hex>:<KEY hex>` line; `#`
+    /// comments and blank lines ignored). Takes precedence over `--enc-key`
+    /// and keeps the key out of the process arguments.
+    #[arg(long, value_name = "PATH")]
+    enc_key_file: Option<String>,
+    /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR),
+    /// `cens` (AES-CTR pattern), `cbc1` (AES-CBC) or `cbcs` (AES-CBC pattern).
+    #[arg(long, default_value = "cenc")]
+    enc_scheme: String,
+    /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
+    #[arg(long, default_value = "key.bin")]
+    enc_key_uri: String,
+    /// DRM systems to emit `pssh` boxes for (comma-separated): any of
+    /// `common`, `widevine`, `playready`.
+    #[arg(long, default_value = "common")]
+    protection_systems: String,
+    /// Enable key rotation with this crypto-period duration in seconds. Each
+    /// period uses a key derived from the base key; signalled per segment via
+    /// `seig` sample groups and per-period `pssh`.
+    #[arg(long, value_name = "SECONDS")]
+    crypto_period_duration: Option<f64>,
 }
 
 /// Parse CLI args and run the requested command.
@@ -95,33 +145,29 @@ pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Command::Package {
-            inputs,
-            out,
-            segment_duration,
-            dash,
-            hls,
-            enc_key,
-            enc_key_file,
-            enc_scheme,
-            enc_key_uri,
-            protection_systems,
-            crypto_period_duration,
-        } => cmd_package(
-            &inputs,
-            &out,
-            segment_duration,
-            dash,
-            hls,
-            EncryptionArgs {
-                key: enc_key.as_deref(),
-                key_file: enc_key_file.as_deref(),
-                scheme: &enc_scheme,
-                key_uri: &enc_key_uri,
-                systems: &protection_systems,
-                crypto_period: crypto_period_duration,
+        Command::Package(p) => cmd_package(PackageCli {
+            inputs: &p.inputs,
+            out: &p.out,
+            segment_duration: p.segment_duration,
+            dash: p.dash,
+            hls: p.hls,
+            presentation: p.presentation.into(),
+            live_window: p.live_window,
+            multi_period: p.multi_period,
+            trick_play: p.trick_play,
+            low_latency: p.low_latency,
+            part_duration: p.part_duration,
+            availability_start_time: p.availability_start_time.as_deref(),
+            scte35: &p.scte35,
+            enc: EncryptionArgs {
+                key: p.enc_key.as_deref(),
+                key_file: p.enc_key_file.as_deref(),
+                scheme: &p.enc_scheme,
+                key_uri: &p.enc_key_uri,
+                systems: &p.protection_systems,
+                crypto_period: p.crypto_period_duration,
             },
-        )?,
+        })?,
         Command::Probe { input } => cmd_probe(&input)?,
     }
 
@@ -144,58 +190,106 @@ fn cmd_probe(input: &str) -> Result<()> {
     Ok(())
 }
 
-/// Encryption-related CLI options, grouped so `cmd_package` stays tidy.
 struct EncryptionArgs<'a> {
-    /// `<KID hex>:<KEY hex>` raw key, or `None` for clear output.
     key: Option<&'a str>,
-    /// Path to a file holding the raw key; takes precedence over `key`.
     key_file: Option<&'a str>,
-    /// `cenc`, `cens`, `cbc1` or `cbcs`.
     scheme: &'a str,
-    /// HLS `#EXT-X-KEY` delivery URI.
     key_uri: &'a str,
-    /// Comma-separated DRM systems to emit `pssh` boxes for.
     systems: &'a str,
-    /// Key-rotation crypto-period duration in seconds, or `None` for one key.
     crypto_period: Option<f64>,
 }
 
-fn cmd_package(
-    inputs: &[String],
-    out: &str,
+struct PackageCli<'a> {
+    inputs: &'a [String],
+    out: &'a str,
     segment_duration: f64,
     dash: bool,
     hls: bool,
-    enc: EncryptionArgs<'_>,
-) -> Result<()> {
-    // The key file (if given) wins over an inline --enc-key.
-    let key_spec = match enc.key_file {
+    presentation: PresentationMode,
+    live_window: Option<usize>,
+    multi_period: bool,
+    trick_play: bool,
+    low_latency: bool,
+    part_duration: Option<f64>,
+    availability_start_time: Option<&'a str>,
+    scte35: &'a [String],
+    enc: EncryptionArgs<'a>,
+}
+
+fn cmd_package(args: PackageCli<'_>) -> Result<()> {
+    let key_spec = match args.enc.key_file {
         Some(path) => Some(read_key_file(path)?),
-        None => enc.key.map(str::to_string),
+        None => args.enc.key.map(str::to_string),
     };
     let encryption = key_spec
-        .map(|k| parse_enc_key(&k, enc.scheme, enc.key_uri, enc.systems, enc.crypto_period))
+        .map(|k| {
+            parse_enc_key(
+                &k,
+                args.enc.scheme,
+                args.enc.key_uri,
+                args.enc.systems,
+                args.enc.crypto_period,
+            )
+        })
         .transpose()?;
 
-    println!("package: {} input(s) -> {out}/", inputs.len());
-    println!("  segment_duration = {segment_duration}s  (dash={dash}, hls={hls})");
+    let markers = args.scte35.iter().map(|s| parse_scte35(s)).collect::<Result<Vec<_>>>()?;
+
+    let mode = match args.presentation {
+        PresentationMode::Vod => "vod",
+        PresentationMode::Event => "event",
+        PresentationMode::Live => "live",
+    };
+    println!("package: {} input(s) -> {}/", args.inputs.len(), args.out);
+    println!(
+        "  segment_duration = {}s  (dash={}, hls={}, presentation={mode})",
+        args.segment_duration, args.dash, args.hls
+    );
+    if args.multi_period {
+        println!("  multi_period = true");
+    }
+    if args.trick_play {
+        println!("  trick_play = true");
+    }
+    if args.low_latency {
+        println!("  low_latency = true  (part_duration = {}s)", args.part_duration.unwrap_or(1.0));
+    }
+    if let Some(w) = args.live_window {
+        println!("  live_window = {w} segment(s)");
+    }
+    if !markers.is_empty() {
+        println!("  scte35 markers = {}", markers.len());
+    }
     if encryption.is_some() {
-        let alg = match enc.scheme {
+        let alg = match args.enc.scheme {
             "cens" => "cens (AES-128-CTR pattern)",
             "cbc1" => "cbc1 (AES-128-CBC)",
             "cbcs" => "cbcs (AES-128-CBC pattern)",
             _ => "cenc (AES-128-CTR)",
         };
         println!("  encryption = {alg}");
-        println!("  protection_systems = {}", enc.systems);
-        if let Some(p) = enc.crypto_period {
+        println!("  protection_systems = {}", args.enc.systems);
+        if let Some(p) = args.enc.crypto_period {
             println!("  key_rotation = every {p}s (crypto period)");
         }
     }
 
-    let input_paths: Vec<PathBuf> = inputs.iter().map(PathBuf::from).collect();
-    let opts =
-        PackageOptions { out_dir: PathBuf::from(out), segment_duration, dash, hls, encryption };
+    let input_paths: Vec<PathBuf> = args.inputs.iter().map(PathBuf::from).collect();
+    let opts = PackageOptions {
+        out_dir: PathBuf::from(args.out),
+        segment_duration: args.segment_duration,
+        dash: args.dash,
+        hls: args.hls,
+        encryption,
+        presentation: args.presentation,
+        live_window_segments: args.live_window,
+        multi_period: args.multi_period,
+        trick_play: args.trick_play,
+        low_latency: args.low_latency,
+        part_duration: args.part_duration,
+        availability_start_time: args.availability_start_time.map(str::to_string),
+        scte35_markers: markers,
+    };
     let output = sheathe_package::package(&input_paths, &opts)?;
 
     println!(
@@ -214,8 +308,38 @@ fn cmd_package(
     Ok(())
 }
 
-/// Parse a `<KID hex>:<KEY hex>` raw-key spec, scheme name, and DRM-system list
-/// into an [`EncryptionSpec`].
+/// Parse `--scte35 TIME[:out|in][:BREAK_DUR]`.
+fn parse_scte35(spec: &str) -> Result<Scte35Marker> {
+    let parts: Vec<&str> = spec.split(':').collect();
+    anyhow::ensure!(!parts.is_empty(), "empty --scte35 spec");
+    let time: f64 = parts[0].parse().context("--scte35 TIME must be a number of seconds")?;
+    anyhow::ensure!(time >= 0.0, "--scte35 TIME must be non-negative");
+    let mut out_of_network = true;
+    let mut break_duration = None;
+    if parts.len() >= 2 {
+        match parts[1].to_ascii_lowercase().as_str() {
+            "out" | "cue-out" | "cue_out" => out_of_network = true,
+            "in" | "cue-in" | "cue_in" => out_of_network = false,
+            other => {
+                // Bare TIME:DURATION form.
+                break_duration = Some(other.parse::<f64>().with_context(|| {
+                    format!("--scte35: expected out/in or duration, got '{other}'")
+                })?);
+            }
+        }
+    }
+    if parts.len() >= 3 {
+        break_duration =
+            Some(parts[2].parse::<f64>().context("--scte35 BREAK_DUR must be a number")?);
+    }
+    Ok(Scte35Marker {
+        time_seconds: time,
+        out_of_network,
+        event_id: None,
+        break_duration_seconds: break_duration,
+    })
+}
+
 fn parse_enc_key(
     spec: &str,
     scheme: &str,
@@ -250,8 +374,6 @@ fn parse_enc_key(
     })
 }
 
-/// Read a raw key from a file: the first `<KID hex>:<KEY hex>` line, ignoring
-/// blank lines and `#` comments.
 fn read_key_file(path: &str) -> Result<String> {
     let content =
         std::fs::read_to_string(path).with_context(|| format!("reading key file {path}"))?;
@@ -263,7 +385,6 @@ fn read_key_file(path: &str) -> Result<String> {
         .with_context(|| format!("no <KID hex>:<KEY hex> entry in key file {path}"))
 }
 
-/// Parse a comma-separated DRM-system list (e.g. `common,widevine,playready`).
 fn parse_protection_systems(list: &str) -> Result<Vec<DrmSystem>> {
     list.split(',')
         .map(str::trim)
@@ -276,7 +397,6 @@ fn parse_protection_systems(list: &str) -> Result<Vec<DrmSystem>> {
         .collect()
 }
 
-/// Parse exactly 32 hex chars into a 16-byte array.
 fn parse_hex16(s: &str) -> Result<[u8; 16]> {
     let s = s.trim();
     anyhow::ensure!(s.len() == 32, "expected 32 hex chars, got {}", s.len());

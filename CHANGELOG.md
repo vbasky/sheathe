@@ -45,6 +45,32 @@ All notable changes to **sheathe** are documented here. The format is based on
 ## [Unreleased]
 
 ### Added
+
+- **Phase 4 — Live & advanced manifests**
+  - **Dynamic DASH / live HLS**: `--presentation vod|event|live` with
+    `availabilityStartTime`, `publishTime`, `minimumUpdatePeriod`,
+    `timeShiftBufferDepth`, `suggestedPresentationDelay`, `UTCTiming`, and
+    HLS sliding windows (`--live-window N`, `#EXT-X-MEDIA-SEQUENCE`, no
+    `#EXT-X-ENDLIST` for live/open events).
+  - **Multi-period DASH** (`--multi-period`): each input is a successive
+    `Period` with continuous `@start` offsets (instead of a single-period ABR
+    ladder).
+  - **Trick-play** (`--trick-play`): keyframe-only CMAF segments, DASH
+    trick-mode AdaptationSet (`EssentialProperty` + `maxPlayoutRate`), HLS
+    `#EXT-X-I-FRAME-STREAM-INF` / `#EXT-X-I-FRAMES-ONLY` playlists.
+  - **Low latency** (`--low-latency --part-duration S`): LL-HLS
+    (`EXT-X-PART` / `PART-INF` / `SERVER-CONTROL` / `PRELOAD-HINT`) and
+    LL-DASH (`availabilityTimeOffset`, `availabilityTimeComplete="false"`)
+    with sample-budgeted part segments.
+  - **SCTE-35 markers** (`--scte35 TIME[:out|in][:BREAK_DUR]`): pure-Rust
+    `splice_insert` builder (MPEG CRC-32) → DASH `EventStream`
+    (`urn:scte:scte35:2014:xml+bin`, base64) and HLS `#EXT-X-DATERANGE`
+    (`SCTE35-OUT` / `SCTE35-IN`, hex).
+  - Library surface: expanded `sheathe-dash::Manifest` (periods, live fields,
+    events) and `sheathe-hls::MediaPlaylist` (VOD/EVENT/live, parts,
+    dateranges, I-frame helper); `sheathe-package::{PresentationMode,
+    Scte35Marker, PackageOptions}` Phase 4 fields.
+
 - **E-AC-3 (Dolby Digital Plus) input** (Phase 3): ETSI TS 102 366 Annex E
   syncframe parser (`strmtyp`/`frmsiz`/`fscod`/`numblkscod`/`acmod`/`lfeon`,
   `bsid == 16`, dependent-substream folding) with `ec-3` AudioSampleEntry +

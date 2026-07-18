@@ -16,15 +16,16 @@ built and validated against it as the reference oracle.
 
 📖 **Read the story:** [Packaging the World's Video in Pure Rust](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
 
-> Status: **working VOD pipeline + encryption + a broad input matrix.** `probe`
-> and `package` demux MP4, MPEG-TS, raw elementary streams, and WebM/Matroska,
-> then write playable CMAF segments + DASH/HLS manifests with correct codec
-> strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3, E-AC-3, MP3,
-> FLAC, Opus. Text: WebVTT, plus CEA-608 caption extraction from H.264/H.265 SEI.
+> Status: **working VOD + live/advanced packaging + encryption + a broad input
+> matrix.** `probe` and `package` demux MP4, MPEG-TS, raw elementary streams,
+> and WebM/Matroska, then write playable CMAF segments + DASH/HLS manifests with
+> correct codec strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3,
+> E-AC-3, MP3, FLAC, Opus. Text: WebVTT, plus CEA-608/708 caption extraction.
 > Encryption covers all four CENC schemes (`cenc`/`cens`/`cbc1`/`cbcs`) with
-> multi-DRM `pssh` and key rotation. The path to full Shaka Packager parity (the
-> last codec/format gaps, real-corpus oracle diffs, live) is tracked in
-> [`ROADMAP.md`](./ROADMAP.md).
+> multi-DRM `pssh` and key rotation. Phase 4 adds dynamic DASH, live/EVENT HLS
+> (sliding window), multi-period DASH, trick-play, LL-HLS/LL-DASH, and SCTE-35
+> markers. Remaining Shaka surface (IO backends, on-demand `SegmentBase`, JIT
+> origin) is Phase 5 — see [`ROADMAP.md`](./ROADMAP.md).
 
 ## Why
 

@@ -132,14 +132,26 @@ servers (an external-service dependency, see below).
   `::cue(.fg_r_g_b) { color: rgb(...) }` when colours are present, backward
   compatible when absent.
 
-## Phase 4 — Live & advanced manifests ⬜
+## Phase 4 — Live & advanced manifests ✅
 
-- ⬜ Dynamic DASH (`type="dynamic"`, availability/UTCTiming, rolling timeline).
-- ⬜ Live HLS (sliding window, `EXT-X-MEDIA-SEQUENCE`, `EVENT`/`VOD` types).
-- ⬜ Multi-period DASH; period continuity.
-- ⬜ Trick-play (DASH trick-mode AdaptationSet; HLS I-frame playlists).
-- ⬜ Low latency: LL-HLS (partial segments, preload hints) and LL-DASH (chunked `moof`).
-- ⬜ SCTE-35 ad markers → DASH `EventStream` / HLS `EXT-X-DATERANGE`.
+- ✅ Dynamic DASH (`type="dynamic"`, `availabilityStartTime` / `publishTime`,
+  `minimumUpdatePeriod`, `timeShiftBufferDepth`, `suggestedPresentationDelay`,
+  `UTCTiming`). CLI: `--presentation live|event`.
+- ✅ Live HLS (sliding window via `--live-window N`, `#EXT-X-MEDIA-SEQUENCE`,
+  `EVENT` / `VOD` / live playlist types, no `#EXT-X-ENDLIST` until finalised).
+- ✅ Multi-period DASH (`--multi-period`): each input becomes a successive
+  `Period` with continuous `@start` offsets.
+- ✅ Trick-play (`--trick-play`): keyframe-only CMAF segments + DASH trick-mode
+  AdaptationSet (`EssentialProperty` + `maxPlayoutRate`) and HLS
+  `#EXT-X-I-FRAME-STREAM-INF` / `#EXT-X-I-FRAMES-ONLY` playlists.
+- ✅ Low latency (`--low-latency --part-duration S`): LL-HLS
+  (`EXT-X-PART` / `PART-INF` / `SERVER-CONTROL` / `PRELOAD-HINT`) and LL-DASH
+  (`availabilityTimeOffset` + `availabilityTimeComplete="false"`) with
+  sample-budgeted part segments.
+- ✅ SCTE-35 ad markers (`--scte35 TIME[:out|in][:BREAK_DUR]`): binary
+  `splice_insert` builder (MPEG CRC-32) → DASH `EventStream`
+  (`urn:scte:scte35:2014:xml+bin`) and HLS `#EXT-X-DATERANGE`
+  (`SCTE35-OUT` / `SCTE35-IN`).
 
 ## Phase 5 — Output formats, IO, operations ⬜
 
@@ -166,22 +178,22 @@ servers (an external-service dependency, see below).
 
 ## Current focus
 
-**Phases 1 and 2 are complete.** The CENC scheme matrix (`cenc`/`cbcs`/`cbc1`/
-`cens`), multi-DRM `pssh` (Widevine + PlayReady + Common), key rotation, and
-key-file input all ship end-to-end, structurally diffed against Shaka Packager
-and ffmpeg decrypt+decode verified. The only Phase 2 item left is live network
-key servers, deferred as an external-service dependency that can't be
-oracle-verified in a hermetic setup.
+**Phases 1–4 are complete.** VOD packaging, the full CENC scheme matrix, the
+broad input/codec matrix, and live/advanced manifests all ship end-to-end.
 
-**Current focus: Phase 3 done.** The inputs & codecs phase is complete across
-all seven crates — MPEG-TS, fragmented-MP4, WebM/Matroska, raw elementary
-streams, the full audio codec set (AC-3, E-AC-3, MP3, FLAC, Opus), WebVTT and
-TTML/IMSC text passthrough, CEA-608 and CEA-708 caption extraction with colour
-styling, and all four WebM lacing modes. 17/17 corpus assets green (the one
-XFAIL is Ogg/Vorbis, explicitly out of scope). **Phase 4 (Live & Advanced
-Manifests) and Phase 5 (Output Formats, IO, Operations) are the next frontier
-— and where Shaka Packager's remaining surface area lives.**
+**Phase 4 (Live & advanced manifests) is done.** Dynamic DASH and live/EVENT
+HLS with sliding windows, multi-period DASH, trick-play (DASH + HLS I-frame),
+low-latency (LL-HLS parts + LL-DASH ATO), and SCTE-35 cue markers are wired
+through `sheathe-dash` / `sheathe-hls` / `sheathe-package` and the CLI. Manifest
+shape is covered by unit tests; live packaging reuses the existing VOD demux →
+CMAF segment path (finite inputs packaged *as* live — a true live origin that
+continuously rewrites the window is Phase 5 IO).
 
-Remaining before **0.3** (no partial milestone releases): **nothing in Phase 3**
-— all items are verified. **Vorbis** is explicitly out of scope — CMAF has no
-standard Vorbis sample entry and Shaka Packager rejects it too.
+**Current focus: Phase 5 — Output formats, IO, operations.** DASH on-demand
+`SegmentBase`, packed-audio HLS / TS mux, HTTP(S)/UDP ingest, JIT origin mode,
+and throughput benchmarks vs Shaka. Also remaining cross-cutting work:
+external conformance (DASH-IF, Apple `mediastreamvalidator`), demuxer fuzzing,
+and deferred live network key servers (Phase 2).
+
+**Vorbis** remains explicitly out of scope — CMAF has no standard Vorbis sample
+entry and Shaka Packager rejects it too.
