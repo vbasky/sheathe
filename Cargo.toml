@@ -59,7 +59,7 @@ sheathe-cli = { path = "crates/sheathe-cli", version = "0.5.0" }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-base64 = "0.22"
+base64 = "0.23"
 crossterm = "0.29"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Pure-Rust AES block cipher (RustCrypto); CTR/CBC modes implemented in-crate.
