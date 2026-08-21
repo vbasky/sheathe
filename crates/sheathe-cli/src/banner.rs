@@ -11,6 +11,8 @@ const NAVY: (u8, u8, u8) = (26, 36, 64);
 const SLATE: (u8, u8, u8) = (71, 85, 105);
 /// Inline-image display size in terminal pixels (embedded asset is 256×256).
 const LOGO_DISPLAY_PX: u32 = 120;
+/// Wordmark used when the inline PNG logo cannot be shown.
+const WORDMARK: &str = "🗡️ sheathe ";
 
 /// Print the logo and version to stderr. The tagline lives in clap's `about` text.
 pub(crate) fn print() {
@@ -26,7 +28,7 @@ pub(crate) fn print() {
                 out,
                 SetAttribute(Attribute::Bold),
                 SetForegroundColor(rgb(NAVY, truecolor)),
-                Print("sheathe "),
+                Print(WORDMARK),
                 SetAttribute(Attribute::Reset),
             );
         } else {
@@ -40,7 +42,7 @@ pub(crate) fn print() {
             Print('\n'),
         );
     } else {
-        eprintln!("  sheathe {}", env!("CARGO_PKG_VERSION"));
+        eprintln!("  {WORDMARK}{}", env!("CARGO_PKG_VERSION"));
     }
 }
 
