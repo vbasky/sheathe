@@ -524,7 +524,7 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 
 [[package]]
 name = "sheathe"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
@@ -540,7 +540,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe-cli"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "base64",
@@ -552,14 +552,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "sheathe-crypto"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "aes",
  "sheathe-core",
@@ -567,14 +567,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-dash"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-es"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
  "sheathe-ts",
@@ -582,21 +582,21 @@ dependencies = [
 
 [[package]]
 name = "sheathe-hls"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mkv"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mp4"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
@@ -604,7 +604,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe-package"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "anyhow",
  "sheathe-core",
@@ -620,14 +620,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-text"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-ts"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "sheathe-core",
 ]
