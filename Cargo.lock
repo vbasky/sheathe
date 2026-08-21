@@ -913,7 +913,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
@@ -929,7 +929,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe-cli"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -941,14 +941,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-core"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "thiserror",
 ]
 
 [[package]]
 name = "sheathe-crypto"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "aes",
  "sheathe-core",
@@ -956,14 +956,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-dash"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-es"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
  "sheathe-ts",
@@ -971,21 +971,21 @@ dependencies = [
 
 [[package]]
 name = "sheathe-hls"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mkv"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-mp4"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
  "sheathe-crypto",
@@ -993,7 +993,7 @@ dependencies = [
 
 [[package]]
 name = "sheathe-package"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "rcgen",
@@ -1016,14 +1016,14 @@ dependencies = [
 
 [[package]]
 name = "sheathe-text"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
 ]
 
 [[package]]
 name = "sheathe-ts"
-version = "0.7.0"
+version = "0.6.1"
 dependencies = [
  "sheathe-core",
 ]

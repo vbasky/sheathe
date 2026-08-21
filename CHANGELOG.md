@@ -6,7 +6,7 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
-## [0.7.0] — 2026-08-22
+## [0.6.1] — 2026-08-22
 
 ### Added
 
