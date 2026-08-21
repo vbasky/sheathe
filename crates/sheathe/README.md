@@ -22,7 +22,7 @@ recipes, and oracle status.
 
 ```toml
 [dependencies]
-sheathe = "0.5"
+sheathe = "0.6"
 ```
 
 Or via Cargo:

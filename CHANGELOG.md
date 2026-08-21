@@ -4,7 +4,7 @@ All notable changes to **sheathe** are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.6.0] — 2026-08-21
 
 ### Changed
 
@@ -229,6 +229,7 @@ Shaka Packager as the reference oracle.
 - **Multi-input ABR ladder**: several inputs → one DASH/HLS manifest.
 - CI with an MSRV guard that reads `rust-version` from `Cargo.toml`.
 
+[0.6.0]: https://github.com/vbasky/sheathe/compare/v0.5.0...v0.6.0
 [0.2.0]: https://github.com/vbasky/sheathe/compare/v0.1.4...v0.2.0
 [0.1.4]: https://github.com/vbasky/sheathe/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/vbasky/sheathe/compare/v0.1.2...v0.1.3
