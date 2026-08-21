@@ -74,7 +74,7 @@ impl HttpPushSink {
 impl ObjectSink for HttpPushSink {
     fn put(&mut self, relative: &str, data: &[u8]) -> Result<()> {
         let url = format!("{}/{}", self.base_url, relative.trim_start_matches('/'));
-        http_put(&url, data, self.authorization.as_deref())
+        crate::tls::http_put(&url, data, &crate::tls::HttpOptions::default())
             .with_context(|| format!("HTTP PUT {url}"))
     }
 
@@ -83,16 +83,15 @@ impl ObjectSink for HttpPushSink {
     }
 }
 
-/// Parse `http://host:port/path` and PUT `body`.
-fn http_put(url: &str, body: &[u8], authorization: Option<&str>) -> Result<()> {
+/// Parse `http://host:port/path` and PUT `body` (plain HTTP, no TLS).
+#[allow(dead_code)]
+fn http_put_plain(url: &str, body: &[u8], authorization: Option<&str>) -> Result<()> {
     let rest = url
         .strip_prefix("http://")
         .or_else(|| url.strip_prefix("https://"))
         .context("only http:// and https:// push URLs are supported")?;
     if url.starts_with("https://") {
-        bail!(
-            "HTTPS push requires TLS; use http:// for the pure-std push sink or terminate TLS externally"
-        );
+        return crate::tls::http_put(url, body, &crate::tls::HttpOptions::default());
     }
     let (hostport, path) =
         rest.split_once('/').map(|(h, p)| (h, format!("/{p}"))).unwrap_or((rest, "/".into()));

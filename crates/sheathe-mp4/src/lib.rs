@@ -13,15 +13,19 @@ use sheathe_core::{Result, Sample, StreamInfo};
 mod box_reader;
 mod box_writer;
 mod codecs;
+mod decrypt;
 mod demux;
 mod fragmenter;
 mod segment;
 
 pub use box_reader::{BoxIter, Cursor, Mp4Box, top_level};
 pub use box_writer::{BoxWriter, FourCc};
+pub use decrypt::decrypt_samples;
 pub use demux::{Mp4Demuxer, Track};
 pub use fragmenter::{Fragmenter, Segment, SegmentPolicy};
-pub use segment::{Encryption, write_init_segment, write_media_segment};
+pub use segment::{
+    Encryption, MuxOptions, write_init_segment, write_init_segment_opts, write_media_segment,
+};
 
 /// Group `samples` into media segments according to `policy`.
 pub fn fragment(

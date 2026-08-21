@@ -324,6 +324,7 @@ fn parse_trak(trak: &Mp4Box<'_>) -> Result<Option<Track>> {
         sample_rate: entry.sample_rate,
         bitrate,
         codec_string: entry.codec_string,
+        language: None,
     };
 
     Ok(Some(Track { info, track_id, sample_count, sample_entry: entry.raw, table }))

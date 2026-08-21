@@ -51,6 +51,7 @@ pub fn webvtt(text: &str) -> Result<TextTrack> {
         sample_rate: None,
         bitrate: None,
         codec_string: Some("wvtt".to_string()),
+        language: None,
     };
     Ok(TextTrack { info, samples, sample_entry: wvtt_sample_entry("WEBVTT") })
 }
@@ -211,6 +212,7 @@ pub fn ttml(text: &str) -> Result<TextTrack> {
         sample_rate: None,
         bitrate: None,
         codec_string: Some("stpp".to_string()),
+        language: None,
     };
     Ok(TextTrack { info, samples: vec![sample], sample_entry: stpp_sample_entry() })
 }

@@ -4,6 +4,53 @@ All notable changes to **sheathe** are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+## [0.7.0] — 2026-08-22
+
+### Added
+
+- **Stream descriptors** — Shaka-style `in=file,stream=audio,language=eng,…`
+  positional args (bare paths still mean every track). Per-stream bandwidth,
+  language, playlist names, HLS NAME/GROUP-ID/CHARACTERISTICS, DASH roles /
+  accessibilities, `skip_encryption`, `drm_label`, `trick_play_factor`,
+  `forced_subtitle`.
+- **HLS/DASH knobs** — `--hls-base-url`, `--hls-media-sequence-number`,
+  `--hls-start-time-offset`, `--create-session-keys`, `--add-program-date-time`,
+  `--closed-captions`, `--use-legacy-vp9-codec-string`,
+  `--dash-add-last-segment-number`, `--segment-template-constant-duration`,
+  `--use-dovi-supplemental-codecs`, `--mvex-before-trak`.
+- **DRM extras** — `--enc-scheme aes128` (HLS AES-128 full-segment),
+  `--crypt-byte-block` / `--skip-byte-block`, `--playready-extra-header-data`,
+  `--keys` labeled raw keys, `--decrypt` of CENC inputs, `--cpix` / SPEKE,
+  Widevine key-server client (`--enable-widevine-encryption`,
+  `--key-server-url`, AES/RSA request signing).
+- **Live / IO** — HTTPS push (rustls), `--ignore-http-output-failures`,
+  `--user-agent`, `--ca-file`, client certs, `--live-rewrite`. Origin
+  `--tls-cert` / `--tls-key` wrap the accept loop in rustls (HTTPS); `--auth
+  user:pass` is HTTP Basic.
+
+### Changed
+
+- **CLI `--help`** is now Shaka Packager-style: grouped headings (Output /
+  Presentation / Encryption), long flag descriptions, examples, and a
+  `packager` flag map. `-h` stays compact.
+- **`sheathe probe`** dumps stream info in a `--dump_stream_info` layout
+  (type, codec, codec_string, time_scale, duration, samples, resolution /
+  sample rate, bitrate) instead of a two-line summary.
+- **`sheathe package`** prints a fuller run summary (inputs, format,
+  presentation, encryption, init paths) and ends with
+  `Packaging completed successfully.`
+
+### Fixed
+
+- **CLI banner** no longer sends iTerm2 inline images to Warp (Failed image
+  placeholder) or Ghostty (no OSC 1337). Ghostty/kitty/WezTerm/rio get the
+  Kitty graphics protocol; iTerm/Konsole keep OSC 1337; everyone else gets
+  the dagger wordmark.
+- **`sheathe` with no command** prints help to stdout and exits 0, instead of
+  treating a missing subcommand as a failure (stderr + exit 2).
+
 ## [0.6.0] — 2026-08-21
 
 ### Changed

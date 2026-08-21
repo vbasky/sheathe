@@ -321,6 +321,7 @@ mod tests {
                 sample_rate: None,
                 bitrate: Some(500_000),
                 codec_string: Some("avc1.42E01E".into()),
+                language: None,
             },
             pid: PID_VIDEO,
             samples: vec![Sample {
@@ -357,6 +358,7 @@ mod tests {
                 sample_rate: Some(48000),
                 bitrate: Some(128_000),
                 codec_string: Some("mp4a.40.2".into()),
+                language: None,
             },
             pid: PID_AUDIO,
             samples: vec![Sample {

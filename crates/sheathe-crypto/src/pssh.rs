@@ -64,11 +64,23 @@ impl ProtectionSystem {
     /// Build the complete `pssh` box for this system, protecting `key` under
     /// `scheme`.
     pub fn pssh_box(self, key: &ContentKey, scheme: Scheme) -> Vec<u8> {
+        self.pssh_box_ex(key, scheme, None)
+    }
+
+    /// Like [`Self::pssh_box`], with optional extra PlayReady header XML
+    /// (Shaka `--playready_extra_header_data`) spliced into the WRMHEADER.
+    pub fn pssh_box_ex(
+        self,
+        key: &ContentKey,
+        scheme: Scheme,
+        playready_extra: Option<&str>,
+    ) -> Vec<u8> {
         match self {
-            // Version-1 box: KID list in the box header, no system data.
             Self::Common => assemble(self.system_id(), 1, &[key.kid], &[]),
             Self::Widevine => assemble(self.system_id(), 0, &[], &widevine_data(key, scheme)),
-            Self::PlayReady => assemble(self.system_id(), 0, &[], &playready_data(key, scheme)),
+            Self::PlayReady => {
+                assemble(self.system_id(), 0, &[], &playready_data(key, scheme, playready_extra))
+            }
         }
     }
 }
@@ -120,17 +132,18 @@ fn put_varint(mut value: u32, out: &mut Vec<u8>) {
 }
 
 /// A PlayReady Object wrapping a single Rights Management Header (`WRMHEADER`).
-fn playready_data(key: &ContentKey, scheme: Scheme) -> Vec<u8> {
+fn playready_data(key: &ContentKey, scheme: Scheme, extra: Option<&str>) -> Vec<u8> {
     let kid = playready_guid(&key.kid);
     let kid_b64 = base64(&kid);
     let checksum_b64 = base64(&playready_checksum(&key.key, &kid));
     // CTR schemes use AESCTR; CBC schemes use AESCBC.
     let algid = if scheme.is_cbc() { "AESCBC" } else { "AESCTR" };
+    let extra = extra.unwrap_or("");
 
     let xml = format!(
         "<WRMHEADER xmlns=\"http://schemas.microsoft.com/DRM/2007/03/PlayReadyHeader\" \
          version=\"4.0.0.0\"><DATA><PROTECTINFO><KEYLEN>16</KEYLEN><ALGID>{algid}</ALGID>\
-         </PROTECTINFO><KID>{kid_b64}</KID><CHECKSUM>{checksum_b64}</CHECKSUM></DATA></WRMHEADER>"
+         </PROTECTINFO><KID>{kid_b64}</KID><CHECKSUM>{checksum_b64}</CHECKSUM>{extra}</DATA></WRMHEADER>"
     );
     let header: Vec<u8> = xml.encode_utf16().flat_map(u16::to_le_bytes).collect();
 

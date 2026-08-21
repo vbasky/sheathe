@@ -10,12 +10,17 @@ sheathe --help
 sheathe <COMMAND> --help
 ```
 
+`-h` prints a compact flag list. `--help` prints long descriptions, examples,
+and the Shaka Packager flag map. Bare paths package every track; Shaka-style
+stream descriptors (`in=file,stream=audio,language=eng,…`) are also accepted.
+
 Global options apply to every subcommand:
 
 | Flag | Description |
 |------|-------------|
 | `--no-banner` | Suppress the startup ASCII banner |
-| `-h`, `--help` | Print help |
+| `-h` | Compact help |
+| `--help` | Long help (flag descriptions + examples) |
 | `-V`, `--version` | Print version |
 
 ---
@@ -222,8 +227,8 @@ sheathe package in.mp4 -o out/ --dash --hls \
 
 - Non-zero on read/parse/write errors or invalid flag combinations (e.g.
   non-positive crypto period).
-- Prints a short summary: rendition count, duration, segment count, paths
-  written.
+- Prints a run summary (inputs, format, presentation, encryption, init
+  paths, manifests) and `Packaging completed successfully.`
 
 ---
 
@@ -247,12 +252,35 @@ sheathe probe captions.vtt
 
 ### Sample output
 
+Modelled on Shaka Packager `--dump_stream_info`:
+
 ```text
-probe: movie.mp4  (12345678 bytes, 2 track(s), MP4)
-  [0] track #1  audio mp4a.40.2 48000Hz ~128kbps
-       samples=12000  timescale=48000
-  [1] track #2  video avc1.640028 1920x1080 ~4500kbps
-       samples=7200  timescale=90000
+File "movie.mp4":
+ container: MP4
+ size: 12345678 bytes
+Found 2 stream(s).
+
+Stream [0] type: Audio
+ track_id: 1
+ codec: AAC
+ codec_string: mp4a.40.2
+ time_scale: 48000
+ duration: 5760000 (120.000 seconds)
+ samples: 12000
+ sampling_frequency: 48000
+ avg_bitrate: 128000
+
+Stream [1] type: Video
+ track_id: 2
+ codec: H264
+ codec_string: avc1.640028
+ time_scale: 90000
+ duration: 10800000 (120.000 seconds)
+ samples: 7200
+ keyframes: 60
+ width: 1920
+ height: 1080
+ avg_bitrate: 4500000
 ```
 
 ### Arguments
@@ -282,6 +310,9 @@ sheathe origin [OPTIONS]
 | `--media-root <DIR>` | `.` | Sandbox for relative `input=` paths |
 | `--cache-dir <DIR>` | `/tmp/sheathe-origin` | Packaged output cache |
 | `--segment-duration <SECS>` | `6` | Segment duration for JIT packages |
+| `--tls-cert <PEM>` | — | Server certificate; with `--tls-key` enables HTTPS |
+| `--tls-key <PEM>` | — | Server private key (PEM) |
+| `--auth <user:pass>` | — | HTTP Basic authentication |
 
 ### HTTP API
 
@@ -308,6 +339,11 @@ curl -s 'http://127.0.0.1:8787/package?input=bear-1280x720.mp4&format=dash'
 
 # Health
 curl -s http://127.0.0.1:8787/health
+
+# HTTPS + Basic auth
+sheathe origin --bind 127.0.0.1:8443 \
+  --tls-cert cert.pem --tls-key key.pem --auth user:pass
+curl -sk -u user:pass https://127.0.0.1:8443/health
 ```
 
 This is a **demo / development origin**, not a production CDN (no TLS, no auth).
@@ -482,12 +518,13 @@ See docs.rs for crate-level API docs after publish.
 
 | Area | Status |
 |------|--------|
-| Live packaging | Finite files described as live; continuous window rewrite is JIT origin only |
-| HTTPS push | Not in pure-std sink — terminate TLS externally or use HTTP |
-| Origin | No TLS, no auth — demo/dev grade |
-| Network DRM license servers | Deferred (need live Widevine/PlayReady endpoints) |
+| Live packaging | `--live-rewrite` re-packages on an interval; JIT origin still on-demand |
+| HTTPS push | rustls (`https://` `--http-push`); client certs and `--ca-file` supported |
+| Origin | `--tls-cert` / `--tls-key` / `--auth` (Basic). Still not a CDN |
+| Network DRM | Widevine CENC key server + CPIX/SPEKE; needs a live URL to fetch keys |
 | Vorbis | Out of scope (no CMAF sample entry; Shaka rejects too) |
 | `--dash` / `--hls` | Must be requested explicitly |
+| CBC decrypt | Encrypted-input `--decrypt` is CTR-oriented; CBC schemes are skipped |
 
 ---
 

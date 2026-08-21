@@ -21,6 +21,15 @@ sheathe-dash.workspace = true
 sheathe-hls.workspace = true
 sheathe-crypto.workspace = true
 anyhow.workspace = true
+rustls.workspace = true
+webpki-roots.workspace = true
+rustls-pemfile.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+rsa.workspace = true
+
+[dev-dependencies]
+rcgen = "0.13"
 
 [lints]
 workspace = true

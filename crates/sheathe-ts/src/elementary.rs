@@ -57,6 +57,7 @@ pub fn h264_from_annex_b(
         sample_rate: None,
         bitrate: None,
         codec_string: avc_codec_string(&sps),
+        language: None,
     };
 
     let samples = if pes_payloads.is_empty() {
@@ -96,6 +97,7 @@ pub fn hevc_from_annex_b(
         sample_rate: None,
         bitrate: None,
         codec_string: hevc_codec_string(&hvcc_bytes(&vps, &sps, &pps)),
+        language: None,
     };
 
     let samples = if pes_payloads.is_empty() {
@@ -131,6 +133,7 @@ pub fn aac_adts(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(sample_rate),
         bitrate: None,
         codec_string: aac_codec_string(&first.data),
+        language: None,
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }
@@ -153,6 +156,7 @@ pub fn ac3(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(header.sample_rate),
         bitrate: None,
         codec_string: Some(ac3_codec_string()),
+        language: None,
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }
@@ -175,6 +179,7 @@ pub fn eac3(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(header.sample_rate),
         bitrate: None,
         codec_string: Some(eac3_codec_string()),
+        language: None,
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }
@@ -197,6 +202,7 @@ pub fn mp3(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(header.sample_rate),
         bitrate: None,
         codec_string: mp3_codec_string(&first.data),
+        language: None,
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }
@@ -219,6 +225,7 @@ pub fn flac(data: &[u8]) -> Result<ElementaryTrack> {
         sample_rate: Some(si.sample_rate),
         bitrate: None,
         codec_string: Some(flac_codec_string()),
+        language: None,
     };
     Ok(ElementaryTrack { info, samples, sample_entry })
 }

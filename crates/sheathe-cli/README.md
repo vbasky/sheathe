@@ -26,14 +26,19 @@ cargo install sheathe-cli
 | Command | Description |
 |---------|-------------|
 | `sheathe package` | Demux → fragment → CMAF/TS/packed-audio segments + DASH/HLS |
-| `sheathe probe` | List streams sheathe detects (no packaging) |
-| `sheathe origin` | JIT HTTP origin — package on `GET /package?input=…` |
+| `sheathe probe` | Dump stream info (Shaka `--dump_stream_info`) without packaging |
+| `sheathe origin` | JIT HTTP(S) origin — package on `GET /package?input=…` |
 
 ```sh
 sheathe package input.mp4 -o site/ --dash --hls --segment-duration 6
+sheathe package in=movie.mp4,stream=audio,language=eng in=movie.mp4,stream=video -o site/ --dash --hls
 sheathe probe input.mp4
 sheathe origin --bind 127.0.0.1:8787 --media-root .
+sheathe origin --bind 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem --auth user:pass
 ```
+
+`--help` prints Shaka-style flag docs (HLS/DASH knobs, CPIX/Widevine, HTTPS
+push, live rewrite). Full reference: [`docs/CLI.md`](https://github.com/vbasky/sheathe/blob/main/docs/CLI.md).
 
 ## Library
 

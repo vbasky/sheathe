@@ -13,6 +13,15 @@ const SLATE: (u8, u8, u8) = (71, 85, 105);
 const LOGO_DISPLAY_PX: u32 = 120;
 /// Wordmark used when the inline PNG logo cannot be shown.
 const WORDMARK: &str = "🗡️ sheathe ";
+/// Kitty graphics-protocol base64 chunk size.
+const KITTY_CHUNK: usize = 4096;
+
+enum ImageProtocol {
+    /// iTerm2 OSC 1337 `File=` (iTerm, Konsole).
+    Iterm2,
+    /// Kitty graphics protocol (Ghostty, kitty, WezTerm, rio).
+    Kitty,
+}
 
 /// Print the logo and version to stderr. The tagline lives in clap's `about` text.
 pub(crate) fn print() {
@@ -72,32 +81,82 @@ fn term_program_is(name: &str) -> bool {
     std::env::var("TERM_PROGRAM").is_ok_and(|t| t == name)
 }
 
-/// Terminals that can show the logo as a real inline PNG (iTerm2 graphics protocol).
-fn terminal_supports_inline_image() -> bool {
-    term_program_is("iTerm.app")
+fn image_protocol() -> Option<ImageProtocol> {
+    if kitty_graphics() {
+        return Some(ImageProtocol::Kitty);
+    }
+    if iterm2_inline_images() {
+        return Some(ImageProtocol::Iterm2);
+    }
+    None
+}
+
+fn kitty_graphics() -> bool {
+    term_program_is("ghostty")
         || term_program_is("WezTerm")
-        || term_program_is("ghostty")
-        || term_program_is("WarpTerminal")
         || term_program_is("rio")
-        || std::env::var("LC_TERMINAL").is_ok_and(|t| t == "iTerm2" || t == "WezTerm")
+        || term_program_is("kitty")
+        || std::env::var("KITTY_WINDOW_ID").is_ok()
+        || std::env::var("TERM").is_ok_and(|t| {
+            let t = t.to_ascii_lowercase();
+            t.contains("kitty") || t.contains("ghostty")
+        })
+}
+
+/// iTerm2 OSC 1337 only. Warp's `File=` path often renders a Failed image block;
+/// Ghostty does not implement OSC 1337.
+fn iterm2_inline_images() -> bool {
+    term_program_is("iTerm.app")
+        || std::env::var("LC_TERMINAL").is_ok_and(|t| t == "iTerm2")
         || std::env::var("KONSOLE_VERSION").is_ok()
 }
 
-/// iTerm2 / WezTerm / Ghostty inline PNG. No half-block fallback — text wordmark otherwise.
+/// Inline PNG via Kitty or iTerm2. No half-block fallback — text wordmark otherwise.
 fn render_logo() -> bool {
-    if !terminal_supports_inline_image() {
-        return false;
+    match image_protocol() {
+        Some(ImageProtocol::Kitty) => render_logo_kitty(),
+        Some(ImageProtocol::Iterm2) => render_logo_iterm2(),
+        None => false,
     }
+}
 
+fn render_logo_iterm2() -> bool {
     let b64 = STANDARD.encode(LOGO_BYTES);
+    let name = STANDARD.encode("logo.png");
     writeln!(
         stderr(),
-        "  \x1b]1337;File=inline=1;preserveAspectRatio=1;width={LOGO_DISPLAY_PX}px;height={LOGO_DISPLAY_PX}px;size={}:{b64}\x07",
+        "  \x1b]1337;File=name={name};inline=1;preserveAspectRatio=1;width={LOGO_DISPLAY_PX}px;height={LOGO_DISPLAY_PX}px;size={}:{b64}\x07",
         LOGO_BYTES.len(),
     )
-    .ok()
-    .map(|()| true)
-    .unwrap_or(false)
+    .is_ok()
+}
+
+fn render_logo_kitty() -> bool {
+    let b64 = STANDARD.encode(LOGO_BYTES);
+    // Approximate 120px at a typical 8×16 cell.
+    let cols = (LOGO_DISPLAY_PX / 8).max(1);
+    let rows = (LOGO_DISPLAY_PX / 16).max(1);
+    let mut out = stderr();
+    if write!(out, "  ").is_err() {
+        return false;
+    }
+    let total = b64.len();
+    let mut offset = 0;
+    while offset < total {
+        let end = (offset + KITTY_CHUNK).min(total);
+        let more = u8::from(end < total);
+        let chunk = &b64[offset..end];
+        let wrote = if offset == 0 {
+            write!(out, "\x1b_Ga=T,f=100,c={cols},r={rows},m={more};{chunk}\x1b\\")
+        } else {
+            write!(out, "\x1b_Gm={more};{chunk}\x1b\\")
+        };
+        if wrote.is_err() {
+            return false;
+        }
+        offset = end;
+    }
+    writeln!(out).is_ok()
 }
 
 fn rgb((r, g, b): (u8, u8, u8), truecolor: bool) -> Color {

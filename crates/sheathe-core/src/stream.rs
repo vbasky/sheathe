@@ -75,6 +75,8 @@ pub struct StreamInfo {
     /// Full RFC 6381 `codecs=` string (e.g. `avc1.640028`, `mp4a.40.2`), if the
     /// codec configuration was parsed. Falls back to the codec family otherwise.
     pub codec_string: Option<String>,
+    /// ISO-639 language tag (`eng`, `und`, …) when known or overridden.
+    pub language: Option<String>,
 }
 
 impl StreamInfo {

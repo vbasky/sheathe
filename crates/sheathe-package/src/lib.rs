@@ -16,9 +16,14 @@
 //! Phase 5 adds on-demand single-file DASH, packed-audio / MPEG-TS HLS, IO
 //! backends, JIT origin, and multi-track parallelism.
 
+mod cpix;
+pub mod descriptor;
 pub mod io;
+pub mod knobs;
 pub mod origin;
 mod scte35;
+mod tls;
+mod widevine;
 
 use anyhow::{Context, Result};
 use sheathe_core::Sample;
@@ -30,22 +35,25 @@ use sheathe_dash::{
 };
 use sheathe_es::{EsDemuxer, is_mp4};
 use sheathe_hls::{
-    DateRange, KeyInfo, MediaPlaylist, PartialSegment, SegmentRef, Variant, iframe_playlist,
-    master_playlist, packed_audio_playlist, ts_media_playlist,
+    DateRange, KeyInfo, MasterOptions, MediaPlaylist, PartialSegment, SegmentRef, Variant,
+    iframe_playlist, master_playlist_with, packed_audio_playlist, ts_media_playlist,
 };
 use sheathe_mp4::{
-    Encryption, Fragmenter, Mp4Demuxer, Segment, SegmentPolicy, Track, write_init_segment,
-    write_media_segment,
+    Encryption, Fragmenter, Mp4Demuxer, MuxOptions, Segment, SegmentPolicy, Track, decrypt_samples,
+    write_init_segment, write_init_segment_opts, write_media_segment,
 };
 use sheathe_ts::{MuxTrack, PID_AUDIO, PID_VIDEO, TsDemuxer, mux_segment, packet::PACKET_SIZE};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub use descriptor::{StreamDescriptor, StreamSelector, parse_descriptor, parse_input_arg};
 pub use io::{FileSink, HttpPushSink, ObjectSink, read_input};
+pub use knobs::{ClosedCaption, CpixConfig, LabeledKey, PackageKnobs, WidevineConfig};
 pub use origin::{OriginConfig, serve as serve_origin};
 pub use scte35::{Scte35Marker, build_splice_insert, to_base64, to_hex_0x};
 pub use sheathe_crypto::{ProtectionSystem as DrmSystem, Scheme as EncScheme};
+pub use tls::HttpOptions;
 
 /// Container / segment format for packaged media.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -110,6 +118,8 @@ pub struct PackageOptions {
     pub parallel: bool,
     /// Optional HTTP base URL for push after local write (`http://host/path`).
     pub http_push_url: Option<String>,
+    /// Extra Shaka-parity knobs (HLS/DASH/DRM/IO).
+    pub knobs: PackageKnobs,
 }
 
 impl Default for PackageOptions {
@@ -132,6 +142,7 @@ impl Default for PackageOptions {
             on_demand: false,
             parallel: false,
             http_push_url: None,
+            knobs: PackageKnobs::default(),
         }
     }
 }
@@ -151,6 +162,13 @@ pub struct EncryptionSpec {
     pub systems: Vec<DrmSystem>,
     /// Key-rotation crypto-period duration in seconds, or `None` for a single key.
     pub crypto_period_seconds: Option<f64>,
+    /// HLS AES-128 full-segment encryption (`--enc-scheme aes128`).
+    pub hls_aes128: bool,
+    /// Pattern crypt/skip block counts.
+    pub crypt_byte_block: u8,
+    pub skip_byte_block: u8,
+    /// Extra PlayReady WRMHEADER XML.
+    pub playready_extra: Option<String>,
 }
 
 /// What a [`package`] run produced.
@@ -188,6 +206,8 @@ struct PackagedRendition {
     trick: Option<TrickRendition>,
     /// On-demand single-file bytes + ranges (when `on_demand`).
     on_demand_file: Option<OnDemandFile>,
+    /// Stream-descriptor overrides for this rendition.
+    presentation: StreamDescriptor,
 }
 
 struct OnDemandFile {
@@ -217,27 +237,105 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
     let out_dir = &opts.out_dir;
     fs::create_dir_all(out_dir).with_context(|| format!("creating {}/", out_dir.display()))?;
 
-    let encryption: Option<Encryption> = opts.encryption.as_ref().map(build_encryption);
-
-    let hls_key = opts.encryption.as_ref().map(|spec| KeyInfo {
-        method: match spec.scheme {
-            Scheme::Cbcs | Scheme::Cbc1 => "SAMPLE-AES",
-            _ => "SAMPLE-AES-CTR",
+    let http_opts = crate::tls::HttpOptions {
+        user_agent: opts.knobs.user_agent.clone(),
+        ca_file: opts.knobs.ca_file.clone(),
+        client_cert_file: opts.knobs.client_cert_file.clone(),
+        client_cert_key_file: opts.knobs.client_cert_key_file.clone(),
+        client_cert_key_password: opts.knobs.client_cert_key_password.clone(),
+        disable_peer_verification: opts.knobs.disable_peer_verification,
+        ignore_failures: opts.knobs.ignore_http_output_failures,
+    };
+    let mut fetched_keys = opts.knobs.labeled_keys.clone();
+    if let Some(wv) = &opts.knobs.widevine {
+        let scheme = opts.encryption.as_ref().map(|e| scheme_str(e.scheme)).unwrap_or("cenc");
+        fetched_keys.extend(widevine::fetch_keys(wv, &http_opts, scheme)?);
+    }
+    if let Some(c) = &opts.knobs.cpix {
+        for k in cpix::load_cpix(c, &http_opts)? {
+            fetched_keys.push(k.as_labeled());
         }
-        .to_string(),
-        key_format: "urn:mpeg:dash:mp4protection:2011".to_string(),
-        uri: spec.key_uri.clone(),
+    }
+    let encryption: Option<Encryption> = opts
+        .encryption
+        .as_ref()
+        .and_then(|spec| if spec.hls_aes128 { None } else { Some(build_encryption(spec)) })
+        .or_else(|| {
+            fetched_keys.first().map(|k| {
+                build_encryption(&EncryptionSpec {
+                    kid: k.kid,
+                    key: k.key,
+                    scheme: EncScheme::Cenc,
+                    key_uri: "key.bin".into(),
+                    systems: vec![DrmSystem::Widevine],
+                    crypto_period_seconds: None,
+                    hls_aes128: false,
+                    crypt_byte_block: opts.knobs.crypt_byte_block,
+                    skip_byte_block: opts.knobs.skip_byte_block,
+                    playready_extra: opts.knobs.playready_extra_header_data.clone(),
+                })
+            })
+        });
+
+    let hls_key = opts.encryption.as_ref().map(|spec| {
+        if spec.hls_aes128 {
+            KeyInfo {
+                method: "AES-128".into(),
+                key_format: "identity".into(),
+                uri: spec.key_uri.clone(),
+                iv: None,
+            }
+        } else {
+            KeyInfo {
+                method: match spec.scheme {
+                    Scheme::Cbcs | Scheme::Cbc1 => "SAMPLE-AES",
+                    _ => "SAMPLE-AES-CTR",
+                }
+                .to_string(),
+                key_format: "urn:mpeg:dash:mp4protection:2011".to_string(),
+                uri: spec.key_uri.clone(),
+                iv: None,
+            }
+        }
     });
 
-    let datas: Vec<Vec<u8>> = inputs
+    let descriptors: Vec<StreamDescriptor> = if opts.knobs.descriptors.is_empty() {
+        inputs.iter().map(StreamDescriptor::from_path).collect()
+    } else {
+        opts.knobs.descriptors.clone()
+    };
+    let load_paths: Vec<PathBuf> = {
+        let mut v = Vec::new();
+        for d in &descriptors {
+            if !v.iter().any(|p: &PathBuf| p == &d.input) {
+                v.push(d.input.clone());
+            }
+        }
+        v
+    };
+    let datas: Vec<Vec<u8>> = load_paths
         .iter()
         .map(|p| fs::read(p).with_context(|| format!("reading {}", p.display())))
         .collect::<Result<_>>()?;
-    let loaded: Vec<LoadedInput> = datas
+    let mut loaded: Vec<LoadedInput> = datas
         .iter()
-        .zip(inputs)
+        .zip(&load_paths)
         .map(|(d, p)| load_input(&p.to_string_lossy(), d))
         .collect::<Result<_>>()?;
+
+    if opts.knobs.decrypt_input {
+        if let Some(spec) = &opts.encryption {
+            let key = sheathe_crypto::ContentKey { kid: spec.kid, key: spec.key };
+            for (loaded_input, path) in loaded.iter_mut().zip(&load_paths) {
+                let bytes = fs::read(path).ok();
+                if let Some(bytes) = bytes {
+                    for lt in &mut loaded_input.tracks {
+                        let _ = decrypt_samples(&bytes, &lt.track, &mut lt.samples, &key);
+                    }
+                }
+            }
+        }
+    }
 
     let policy = SegmentPolicy { target_seconds: opts.segment_duration, keyframes_only: true };
     let part_dur = opts.part_duration.unwrap_or(1.0);
@@ -250,64 +348,94 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
     // Per-input duration for multi-period starts.
     let mut period_durations: Vec<f64> = Vec::new();
 
-    // Build work items (input, track) so we can optionally parallelise.
-    let mut work: Vec<(usize, usize)> = Vec::new(); // (input_idx, track_idx)
-    for (ii, input) in loaded.iter().enumerate() {
+    // Build work items (input, track, descriptor) so we can optionally parallelise.
+    let mut work: Vec<(usize, usize, StreamDescriptor)> = Vec::new();
+    for desc in &descriptors {
+        let Some(ii) = load_paths.iter().position(|p| p == &desc.input) else { continue };
+        let input = &loaded[ii];
+        let mut matched = false;
         for ti in 0..input.tracks.len() {
-            work.push((ii, ti));
+            let kind = input.tracks[ti].track.info.kind;
+            if desc.matches(ti, kind) {
+                work.push((ii, ti, desc.clone()));
+                matched = true;
+                if !matches!(desc.selector, StreamSelector::All) {
+                    break;
+                }
+            }
         }
+        anyhow::ensure!(matched, "no track matched descriptor for {}", desc.input.display());
     }
 
-    let package_one =
-        |input_idx: usize, track_idx: usize, rep: usize| -> Result<PackagedRendition> {
-            let input = &loaded[input_idx];
-            let lt = &input.tracks[track_idx];
-            let track = &lt.track;
-            let samples = &lt.samples;
-            let period_index = if opts.multi_period { input_idx } else { 0 };
-            let mut frag = Fragmenter::new(track.info.clone(), policy);
-            for s in samples.iter().cloned() {
-                frag.push(s)?;
-            }
-            let segments = frag.finish();
-            let ts = track.info.timescale;
+    let package_one = |input_idx: usize,
+                       track_idx: usize,
+                       desc: StreamDescriptor,
+                       rep: usize|
+     -> Result<PackagedRendition> {
+        let input = &loaded[input_idx];
+        let lt = &input.tracks[track_idx];
+        let mut track = lt.track.clone();
+        if let Some(lang) = &desc.language {
+            track.info.language = Some(lang.clone());
+        }
+        if let Some(bw) = desc.bandwidth {
+            track.info.bitrate = Some(bw);
+        }
+        if opts.knobs.use_legacy_vp9_codec_string
+            && matches!(track.info.codec, sheathe_core::Codec::Vp9)
+        {
+            track.info.codec_string = Some("vp9".into());
+        }
+        let samples = &lt.samples;
+        let track = &track;
+        let period_index = if opts.multi_period { input_idx } else { 0 };
+        let mut frag = Fragmenter::new(track.info.clone(), policy);
+        for s in samples.iter().cloned() {
+            frag.push(s)?;
+        }
+        let segments = frag.finish();
+        let ts = track.info.timescale;
 
-            match opts.segment_format {
-                SegmentFormat::Cmaf => package_cmaf_rendition(
-                    out_dir,
-                    track,
-                    samples,
-                    &segments,
-                    rep,
-                    period_index,
-                    encryption.as_ref(),
-                    opts,
-                    part_dur,
-                ),
-                SegmentFormat::MpegTs => {
-                    package_ts_rendition(out_dir, track, samples, &segments, rep, period_index)
-                }
-                SegmentFormat::PackedAudio => {
-                    package_packed_audio(out_dir, track, samples, &segments, rep, period_index)
-                }
+        let enc = if desc.skip_encryption { None } else { encryption.as_ref() };
+        match opts.segment_format {
+            SegmentFormat::Cmaf => package_cmaf_rendition(
+                out_dir,
+                track,
+                samples,
+                &segments,
+                rep,
+                period_index,
+                enc,
+                opts,
+                part_dur,
+                desc.trick_play_factor.unwrap_or(1),
+            ),
+            SegmentFormat::MpegTs => {
+                package_ts_rendition(out_dir, track, samples, &segments, rep, period_index)
             }
-            .map(|mut r| {
-                let track_total: u64 = r.all_durations.iter().sum();
-                let _ = Scaled::new(track_total, ts).seconds(); // keep timing consistent
-                r.period_index = period_index;
-                r
-            })
-        };
+            SegmentFormat::PackedAudio => {
+                package_packed_audio(out_dir, track, samples, &segments, rep, period_index)
+            }
+        }
+        .map(|mut r| {
+            let track_total: u64 = r.all_durations.iter().sum();
+            let _ = Scaled::new(track_total, ts).seconds(); // keep timing consistent
+            r.period_index = period_index;
+            r.presentation = desc;
+            r
+        })
+    };
 
     if opts.parallel && work.len() > 1 {
         use std::sync::Mutex;
         let results = Mutex::new(Vec::new());
         let errors = Mutex::new(Vec::new());
         std::thread::scope(|scope| {
-            for (i, (ii, ti)) in work.iter().enumerate() {
+            for (i, (ii, ti, desc)) in work.iter().enumerate() {
                 let results = &results;
                 let errors = &errors;
-                scope.spawn(move || match package_one(*ii, *ti, i) {
+                let desc = desc.clone();
+                scope.spawn(move || match package_one(*ii, *ti, desc, i) {
                     Ok(r) => results.lock().unwrap().push((i, r)),
                     Err(e) => errors.lock().unwrap().push(format!("{e:#}")),
                 });
@@ -341,8 +469,8 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
             rep += 1;
         }
     } else {
-        for (i, (ii, ti)) in work.iter().enumerate() {
-            let r = package_one(*ii, *ti, i)?;
+        for (i, (ii, ti, desc)) in work.iter().enumerate() {
+            let r = package_one(*ii, *ti, desc.clone(), i)?;
             let track_total: u64 = r.all_durations.iter().sum();
             let track_seconds =
                 Scaled::new(track_total, sheathe_core::Timescale(r.timescale)).seconds();
@@ -399,13 +527,56 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
             &avail_start,
         )?;
         let path = out_dir.join("master.m3u8");
-        fs::write(&path, master_playlist(&variants)).context("writing master.m3u8")?;
+        let master_opts = MasterOptions {
+            session_keys: if opts.knobs.create_session_keys {
+                hls_key.iter().cloned().collect()
+            } else {
+                Vec::new()
+            },
+            closed_captions: opts
+                .knobs
+                .closed_captions
+                .iter()
+                .map(|c| sheathe_hls::ClosedCaption {
+                    instream_id: c.instream_id.clone(),
+                    name: c.name.clone(),
+                    language: c.language.clone(),
+                    default: c.default,
+                    autoselect: c.autoselect,
+                })
+                .collect(),
+            start_time_offset: opts.knobs.hls_start_time_offset,
+            base_url: opts.knobs.hls_base_url.clone().unwrap_or_default(),
+        };
+        fs::write(&path, master_playlist_with(&variants, &master_opts))
+            .context("writing master.m3u8")?;
         hls_master = Some(path);
+    }
+
+    if opts.encryption.as_ref().is_some_and(|e| e.hls_aes128) {
+        let spec = opts.encryption.as_ref().unwrap();
+        for (i, p) in media_segments.iter().enumerate() {
+            if let Ok(data) = fs::read(p) {
+                let mut iv = [0u8; 16];
+                iv[12..16].copy_from_slice(&((i as u32) + 1).to_be_bytes());
+                if let Ok(enc) = sheathe_crypto::aes_cbc_pkcs7_encrypt(&spec.key, &iv, &data) {
+                    let _ = fs::write(p, enc);
+                }
+            }
+        }
     }
 
     // HTTP push of all written objects (after manifests exist).
     if let Some(url) = &opts.http_push_url {
-        let mut sink = HttpPushSink::new(url);
+        let http_opts = crate::tls::HttpOptions {
+            user_agent: opts.knobs.user_agent.clone(),
+            ca_file: opts.knobs.ca_file.clone(),
+            client_cert_file: opts.knobs.client_cert_file.clone(),
+            client_cert_key_file: opts.knobs.client_cert_key_file.clone(),
+            client_cert_key_password: opts.knobs.client_cert_key_password.clone(),
+            disable_peer_verification: opts.knobs.disable_peer_verification,
+            ignore_failures: opts.knobs.ignore_http_output_failures,
+        };
         let mut paths: Vec<PathBuf> =
             init_segments.iter().chain(media_segments.iter()).cloned().collect();
         if let Some(p) = &dash_manifest {
@@ -436,7 +607,8 @@ pub fn package(inputs: &[PathBuf], opts: &PackageOptions) -> Result<PackageOutpu
             if let Ok(data) = fs::read(&p) {
                 let rel =
                     p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                sink.put(&rel, &data)?;
+                let dest = format!("{}/{}", url.trim_end_matches('/'), rel);
+                crate::tls::http_put(&dest, &data, &http_opts)?;
             }
         }
     }
@@ -533,6 +705,7 @@ fn build_dash_manifest(
                     r.timescale,
                     durs,
                 );
+                apply_dash_presentation(&mut rep, r);
                 rep.set_start_number(start_number);
                 rep.set_presentation_time_offset(pto);
                 rep.set_availability_time_offset(ato);
@@ -588,6 +761,8 @@ fn build_dash_manifest(
             }),
             periods,
             protection,
+            add_last_segment_number: opts.knobs.dash_add_last_segment_number,
+            segment_template_constant_duration: opts.knobs.segment_template_constant_duration,
             ..Manifest::default()
         },
         PresentationMode::Event | PresentationMode::Live => {
@@ -609,8 +784,23 @@ fn build_dash_manifest(
                 utc_timing: Some(UtcTiming::http_iso("https://time.akamai.com/?iso")),
                 periods,
                 protection,
+                add_last_segment_number: opts.knobs.dash_add_last_segment_number,
+                segment_template_constant_duration: opts.knobs.segment_template_constant_duration,
             }
         }
+    }
+}
+
+fn apply_dash_presentation(rep: &mut Representation, r: &PackagedRendition) {
+    rep.language = r.presentation.language.clone();
+    rep.roles = r.presentation.dash_roles.clone();
+    if r.presentation.forced_subtitle && !rep.roles.iter().any(|x| x == "forced-subtitle") {
+        rep.roles.push("forced-subtitle".into());
+    }
+    rep.accessibilities = r.presentation.dash_accessibilities.clone();
+    if r.stream.codec_string.as_deref().is_some_and(|c| c.contains("dvh1") || c.contains("dvhe")) {
+        // Leave a supplemental codecs hint; the primary codec stays as parsed.
+        rep.supplemental_codecs = r.stream.codec_string.clone();
     }
 }
 
@@ -664,7 +854,8 @@ fn write_hls_playlists(
         } else {
             rep_id_from_init(&r.init_name)
         };
-        let media_name = format!("media_{id}.m3u8");
+        let media_name =
+            r.presentation.playlist_name.clone().unwrap_or_else(|| format!("media_{id}.m3u8"));
 
         let use_map = matches!(opts.segment_format, SegmentFormat::Cmaf) && !r.init_name.is_empty();
         let mut pl =
@@ -677,11 +868,7 @@ fn write_hls_playlists(
                 };
                 fs::write(out_dir.join(&media_name), text)
                     .with_context(|| format!("writing {media_name}"))?;
-                variants.push(Variant {
-                    stream: r.stream.clone(),
-                    playlist_uri: media_name,
-                    iframe_playlist_uri: None,
-                });
+                variants.push(variant_from_rendition(r, media_name, None));
                 continue;
             } else {
                 match opts.presentation {
@@ -691,9 +878,12 @@ fn write_hls_playlists(
                     PresentationMode::Event => {
                         MediaPlaylist::event(&r.init_name, segs, hls_key.cloned(), false)
                     }
-                    PresentationMode::Live => {
-                        MediaPlaylist::live(&r.init_name, media_sequence, segs, hls_key.cloned())
-                    }
+                    PresentationMode::Live => MediaPlaylist::live(
+                        &r.init_name,
+                        media_sequence + opts.knobs.hls_media_sequence_number,
+                        segs,
+                        hls_key.cloned(),
+                    ),
                 }
             };
         if !use_map {
@@ -715,11 +905,17 @@ fn write_hls_playlists(
         if r.period_index == 0 {
             pl.dateranges = dateranges.clone();
         }
-        // Tag first segment with program-date-time for live/event.
-        if matches!(opts.presentation, PresentationMode::Live | PresentationMode::Event)
-            && let Some(first) = pl.segments.first_mut()
-        {
-            first.program_date_time = Some(avail_start.to_string());
+        pl.start_time_offset = opts.knobs.hls_start_time_offset;
+        pl.base_url = opts.knobs.hls_base_url.clone().unwrap_or_default();
+        // Tag first segment with program-date-time for live/event, or all when requested.
+        let tag_pdt = opts.knobs.add_program_date_time
+            || matches!(opts.presentation, PresentationMode::Live | PresentationMode::Event);
+        if tag_pdt {
+            for (i, seg) in pl.segments.iter_mut().enumerate() {
+                if (i == 0 || opts.knobs.add_program_date_time) && seg.program_date_time.is_none() {
+                    seg.program_date_time = Some(avail_start.to_string());
+                }
+            }
         }
 
         fs::write(out_dir.join(&media_name), pl.to_m3u8())
@@ -727,7 +923,11 @@ fn write_hls_playlists(
 
         let iframe_uri = if let Some(trick) = &r.trick {
             let (_t0, tsegs) = window_slice(&trick.all_hls_segs, window);
-            let iframe_name = format!("iframe_{id}.m3u8");
+            let iframe_name = r
+                .presentation
+                .iframe_playlist_name
+                .clone()
+                .unwrap_or_else(|| format!("iframe_{id}.m3u8"));
             fs::write(out_dir.join(&iframe_name), iframe_playlist(&trick.init_name, &tsegs))
                 .with_context(|| format!("writing {iframe_name}"))?;
             Some(iframe_name)
@@ -735,13 +935,25 @@ fn write_hls_playlists(
             None
         };
 
-        variants.push(Variant {
-            stream: r.stream.clone(),
-            playlist_uri: media_name,
-            iframe_playlist_uri: iframe_uri,
-        });
+        variants.push(variant_from_rendition(r, media_name, iframe_uri));
     }
     Ok(variants)
+}
+
+fn variant_from_rendition(
+    r: &PackagedRendition,
+    playlist_uri: String,
+    iframe: Option<String>,
+) -> Variant {
+    let mut v = Variant::new(r.stream.clone(), playlist_uri);
+    v.iframe_playlist_uri = iframe;
+    v.name = r.presentation.hls_name.clone();
+    v.group_id = r.presentation.hls_group_id.clone();
+    v.language = r.presentation.language.clone();
+    v.characteristics = r.presentation.hls_characteristics.clone();
+    v.forced = r.presentation.forced_subtitle;
+    v.bandwidth = r.presentation.bandwidth;
+    v
 }
 
 fn scte35_dateranges(markers: &[Scte35Marker], avail_start: &str) -> Vec<DateRange> {
@@ -775,9 +987,11 @@ fn package_cmaf_rendition(
     encryption: Option<&Encryption>,
     opts: &PackageOptions,
     part_dur: f64,
+    trick_play_factor: u32,
 ) -> Result<PackagedRendition> {
     let ts = track.info.timescale;
-    let init_bytes = write_init_segment(track, encryption);
+    let mux = MuxOptions { mvex_before_trak: opts.knobs.mvex_before_trak };
+    let init_bytes = write_init_segment_opts(track, encryption, &mux);
     let init_name = format!("init_{rep}.mp4");
     fs::write(out_dir.join(&init_name), &init_bytes)
         .with_context(|| format!("writing {init_name}"))?;
@@ -841,7 +1055,10 @@ fn package_cmaf_rendition(
         None
     };
 
-    let trick = if opts.trick_play && track.info.kind == MediaKind::Video && !opts.on_demand {
+    let trick = if (opts.trick_play || trick_play_factor > 1)
+        && track.info.kind == MediaKind::Video
+        && !opts.on_demand
+    {
         let mut init_segs = Vec::new();
         let mut media_segs = Vec::new();
         Some(write_trick_play(
@@ -850,6 +1067,7 @@ fn package_cmaf_rendition(
             samples,
             rep,
             encryption,
+            trick_play_factor.max(1),
             &mut init_segs,
             &mut media_segs,
         )?)
@@ -867,6 +1085,7 @@ fn package_cmaf_rendition(
         period_index,
         trick,
         on_demand_file,
+        presentation: StreamDescriptor::default(),
     })
 }
 
@@ -900,6 +1119,7 @@ fn package_ts_rendition(
         period_index,
         trick: None,
         on_demand_file: None,
+        presentation: StreamDescriptor::default(),
     })
 }
 
@@ -943,21 +1163,28 @@ fn package_packed_audio(
         period_index,
         trick: None,
         on_demand_file: None,
+        presentation: StreamDescriptor::default(),
     })
 }
 
 /// Write keyframe-only trick-play segments for a video track.
+#[allow(clippy::too_many_arguments)]
 fn write_trick_play(
     out_dir: &Path,
     track: &Track,
     samples: &[Sample],
     rep: usize,
     encryption: Option<&Encryption>,
+    factor: u32,
     init_segments: &mut Vec<PathBuf>,
     media_segments: &mut Vec<PathBuf>,
 ) -> Result<TrickRendition> {
-    let keyframes: Vec<Sample> =
-        samples.iter().filter(|s| s.is_segment_boundary()).cloned().collect();
+    let keyframes: Vec<Sample> = samples
+        .iter()
+        .filter(|s| s.is_segment_boundary())
+        .step_by(factor.max(1) as usize)
+        .cloned()
+        .collect();
     anyhow::ensure!(!keyframes.is_empty(), "trick-play: video track has no keyframes");
 
     // One segment per keyframe so the I-frame playlist can seek freely.
@@ -1171,6 +1398,9 @@ fn build_encryption(spec: &EncryptionSpec) -> Encryption {
         constant_iv,
         systems: spec.systems.clone(),
         crypto_period_seconds: spec.crypto_period_seconds,
+        crypt_byte_block: spec.crypt_byte_block,
+        skip_byte_block: spec.skip_byte_block,
+        playready_extra: spec.playready_extra.clone(),
     }
 }
 
@@ -1183,6 +1413,10 @@ pub struct ProbeStream {
     pub info: StreamInfo,
     /// Number of coded samples in the track.
     pub sample_count: usize,
+    /// Media duration in the stream timescale (sum of sample durations).
+    pub duration_ticks: u64,
+    /// Number of keyframe / sync samples (meaningful for video).
+    pub keyframe_count: usize,
 }
 
 /// Result of [`probe`]: the detected container and its streams.
@@ -1208,6 +1442,8 @@ pub fn probe(input: &Path) -> Result<ProbeReport> {
             track_id: lt.track.track_id,
             info: lt.track.info.clone(),
             sample_count: lt.samples.len(),
+            duration_ticks: lt.samples.iter().map(|s| u64::from(s.duration)).sum(),
+            keyframe_count: lt.samples.iter().filter(|s| s.is_segment_boundary()).count(),
         })
         .collect();
     Ok(ProbeReport { format: loaded.format, size_bytes: bytes.len(), streams })
@@ -1349,6 +1585,8 @@ fn load_mp4(path: &str, data: &[u8]) -> Result<LoadedInput> {
 }
 
 /// One-line human description of a stream (re-exported for CLI/probe use).
+///
+/// For a Shaka-style multi-line dump see [`dump_stream`].
 pub fn describe(info: &StreamInfo) -> String {
     let kind = match info.kind {
         MediaKind::Video => "video",
@@ -1366,4 +1604,106 @@ pub fn describe(info: &StreamInfo) -> String {
         s.push_str(&format!(" ~{}kbps", br / 1000));
     }
     s
+}
+
+/// Multi-line dump of one probed stream, modelled on Shaka Packager
+/// `--dump_stream_info`.
+pub fn dump_stream(index: usize, stream: &ProbeStream) -> String {
+    use sheathe_core::Codec;
+
+    let type_name = match stream.info.kind {
+        MediaKind::Video => "Video",
+        MediaKind::Audio => "Audio",
+        MediaKind::Text => "Text",
+    };
+    let codec = match &stream.info.codec {
+        Codec::H264 => "H264",
+        Codec::H265 => "H265",
+        Codec::Av1 => "AV1",
+        Codec::Vp8 => "VP8",
+        Codec::Vp9 => "VP9",
+        Codec::Aac => "AAC",
+        Codec::Ac3 => "AC3",
+        Codec::Eac3 => "EAC3",
+        Codec::Mp3 => "MP3",
+        Codec::Flac => "FLAC",
+        Codec::Opus => "Opus",
+        Codec::WebVtt => "WebVTT",
+        Codec::Stpp => "TTML",
+        Codec::Other(s) => s.as_str(),
+    };
+    let scale = stream.info.timescale.0.max(1);
+    let seconds = stream.duration_ticks as f64 / f64::from(scale);
+
+    let mut lines = vec![
+        format!("Stream [{index}] type: {type_name}"),
+        format!(" track_id: {}", stream.track_id),
+        format!(" codec: {codec}"),
+        format!(" codec_string: {}", stream.info.rfc6381()),
+        format!(" time_scale: {}", stream.info.timescale.0),
+        format!(" duration: {} ({seconds:.3} seconds)", stream.duration_ticks),
+        format!(" samples: {}", stream.sample_count),
+    ];
+    if stream.info.kind == MediaKind::Video {
+        lines.push(format!(" keyframes: {}", stream.keyframe_count));
+    }
+    if let Some((w, h)) = stream.info.resolution {
+        lines.push(format!(" width: {w}"));
+        lines.push(format!(" height: {h}"));
+    }
+    if let Some(rate) = stream.info.sample_rate {
+        lines.push(format!(" sampling_frequency: {rate}"));
+    }
+    if let Some(br) = stream.info.bitrate {
+        lines.push(format!(" avg_bitrate: {br}"));
+    }
+    if let Some(lang) = &stream.info.language {
+        lines.push(format!(" language: {lang}"));
+    }
+    lines.join("\n")
+}
+
+#[cfg(test)]
+mod dump_tests {
+    use super::*;
+    use sheathe_core::{Codec, MediaKind, StreamInfo, Timescale};
+
+    fn video_stream() -> ProbeStream {
+        ProbeStream {
+            track_id: 1,
+            info: StreamInfo {
+                kind: MediaKind::Video,
+                codec: Codec::H264,
+                timescale: Timescale(12_800),
+                resolution: Some((640, 360)),
+                sample_rate: None,
+                bitrate: Some(500_000),
+                codec_string: Some("avc1.64001e".into()),
+                language: None,
+            },
+            sample_count: 4,
+            duration_ticks: 2_048,
+            keyframe_count: 1,
+        }
+    }
+
+    #[test]
+    fn dump_stream_matches_shaka_field_names() {
+        let dump = dump_stream(0, &video_stream());
+        assert!(dump.starts_with("Stream [0] type: Video"));
+        for needle in [
+            "track_id: 1",
+            "codec: H264",
+            "codec_string: avc1.64001e",
+            "time_scale: 12800",
+            "duration: 2048 (0.160 seconds)",
+            "samples: 4",
+            "keyframes: 1",
+            "width: 640",
+            "height: 360",
+            "avg_bitrate: 500000",
+        ] {
+            assert!(dump.contains(needle), "missing {needle:?} in:\n{dump}");
+        }
+    }
 }

@@ -21,8 +21,8 @@
 //! caller decides the per-track pattern and the NAL-aware clear/protected split
 //! via the [`Subsample`] list, so this crate stays format-agnostic.
 
-use aes::Aes128;
 use aes::cipher::{BlockCipherEncrypt, KeyInit};
+use aes::{Aes128, Aes256};
 use sheathe_core::{Error, Result};
 
 mod pssh;
@@ -88,6 +88,12 @@ impl Pattern {
     pub const NONE: Pattern = Pattern { crypt_blocks: 0, skip_blocks: 0 };
     /// The standard CMAF video pattern: encrypt 1 block, skip 9.
     pub const VIDEO: Pattern = Pattern { crypt_blocks: 1, skip_blocks: 9 };
+
+    /// Build a pattern from Shaka-style `--crypt_byte_block` / `--skip_byte_block`.
+    /// `(0, 0)` is treated as [`Pattern::NONE`].
+    pub const fn from_blocks(crypt: u8, skip: u8) -> Pattern {
+        Pattern { crypt_blocks: crypt, skip_blocks: skip }
+    }
 
     /// Whether this pattern leaves any blocks clear (i.e. is a real pattern).
     fn is_patterned(self) -> bool {
@@ -290,6 +296,125 @@ fn incr_be(counter: &mut [u8; 16]) {
         if !carry {
             break;
         }
+    }
+}
+
+/// AES-CBC encrypt `data` with PKCS#7 padding. `key` is 16 (AES-128) or 32
+/// (AES-256) bytes; `iv` is 16 bytes. Used for HLS `METHOD=AES-128` full-segment
+/// encryption and Widevine AES request signing (SHA-1 hash → AES-CBC).
+pub fn aes_cbc_pkcs7_encrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    if iv.len() != 16 {
+        return Err(Error::malformed("CBC IV must be 16 bytes"));
+    }
+    let padded = pkcs7_pad(data, 16);
+    aes_cbc_raw(key, iv, &padded)
+}
+
+/// AES-CBC decrypt PKCS#7-padded ciphertext. Inverse of [`aes_cbc_pkcs7_encrypt`].
+pub fn aes_cbc_pkcs7_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    if iv.len() != 16 {
+        return Err(Error::malformed("CBC IV must be 16 bytes"));
+    }
+    if data.len() % 16 != 0 || data.is_empty() {
+        return Err(Error::malformed("CBC ciphertext must be a non-empty multiple of 16"));
+    }
+    let plain = aes_cbc_raw_decrypt(key, iv, data)?;
+    pkcs7_unpad(&plain)
+}
+
+fn pkcs7_pad(data: &[u8], block: usize) -> Vec<u8> {
+    let n = block - (data.len() % block);
+    let mut v = data.to_vec();
+    v.extend(std::iter::repeat_n(n as u8, n));
+    v
+}
+
+fn pkcs7_unpad(data: &[u8]) -> Result<Vec<u8>> {
+    let n = *data.last().ok_or_else(|| Error::malformed("empty PKCS7 buffer"))? as usize;
+    if n == 0
+        || n > 16
+        || n > data.len()
+        || !data[data.len() - n..].iter().all(|&b| b as usize == n)
+    {
+        return Err(Error::malformed("invalid PKCS7 padding"));
+    }
+    Ok(data[..data.len() - n].to_vec())
+}
+
+fn aes_cbc_raw(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    let mut prev = [0u8; 16];
+    prev.copy_from_slice(iv);
+    let mut out = data.to_vec();
+    for chunk in out.chunks_mut(16) {
+        for (b, p) in chunk.iter_mut().zip(prev.iter()) {
+            *b ^= *p;
+        }
+        encrypt_block(key, chunk)?;
+        prev.copy_from_slice(chunk);
+    }
+    Ok(out)
+}
+
+fn aes_cbc_raw_decrypt(key: &[u8], iv: &[u8], data: &[u8]) -> Result<Vec<u8>> {
+    let mut prev = [0u8; 16];
+    prev.copy_from_slice(iv);
+    let mut out = data.to_vec();
+    for chunk in out.chunks_mut(16) {
+        let saved = <[u8; 16]>::try_from(&chunk[..]).unwrap();
+        decrypt_block(key, chunk)?;
+        for (b, p) in chunk.iter_mut().zip(prev.iter()) {
+            *b ^= *p;
+        }
+        prev = saved;
+    }
+    Ok(out)
+}
+
+fn encrypt_block(key: &[u8], block: &mut [u8]) -> Result<()> {
+    match key.len() {
+        16 => {
+            let cipher = Aes128::new_from_slice(key).expect("16");
+            let mut b = [0u8; 16];
+            b.copy_from_slice(block);
+            cipher.encrypt_block((&mut b).into());
+            block.copy_from_slice(&b);
+            Ok(())
+        }
+        32 => {
+            let cipher = Aes256::new_from_slice(key).expect("32");
+            let mut b = [0u8; 16];
+            b.copy_from_slice(block);
+            cipher.encrypt_block((&mut b).into());
+            block.copy_from_slice(&b);
+            Ok(())
+        }
+        _ => Err(Error::malformed("AES key must be 16 or 32 bytes")),
+    }
+}
+
+fn decrypt_block(key: &[u8], block: &mut [u8]) -> Result<()> {
+    // AES decrypt = encrypt with inverse cipher. Aes128 implements BlockCipherDecrypt
+    // via the `cipher` crate when the `block-decrypt` feature is on; aes 0.9
+    // `Aes128` implements both encrypt and decrypt through `cipher::BlockDecrypt`.
+    use aes::cipher::BlockCipherDecrypt;
+    match key.len() {
+        16 => {
+            let cipher = Aes128::new_from_slice(key).expect("16");
+            let mut b = [0u8; 16];
+            b.copy_from_slice(block);
+            cipher.decrypt_block((&mut b).into());
+            block.copy_from_slice(&b);
+            Ok(())
+        }
+        32 => {
+            let cipher = Aes256::new_from_slice(key).expect("32");
+            let mut b = [0u8; 16];
+            b.copy_from_slice(block);
+            cipher.decrypt_block((&mut b).into());
+            block.copy_from_slice(&b);
+            Ok(())
+        }
+        _ => Err(Error::malformed("AES key must be 16 or 32 bytes")),
     }
 }
 

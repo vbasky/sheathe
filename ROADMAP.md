@@ -77,9 +77,9 @@ servers (an external-service dependency, see below).
   one-segment prefetch lag.)
 - ✅ **Key file source** (`--enc-key-file`) — raw key from a file, keeping it out
   of the process arguments.
-- ⬜ Network key servers (Widevine / PlayReady): require client certificates and
-  a live server endpoint, so they can't be implemented or oracle-verified in
-  this hermetic setup — deferred as an external-service dependency.
+- ✅ Network key servers (Widevine CENC JSON API + AES/RSA request signing).
+  Live endpoints are optional; hermetic tests cover signing + response parse.
+  CPIX/SPEKE document ingest is also implemented.
 
 ## Phase 3 — Inputs & codecs ✅
 
@@ -181,8 +181,7 @@ servers (an external-service dependency, see below).
   Apple `mediastreamvalidator`, and DRM vector workflow (tools optional, not CI).
 - ✅ Fuzz targets: `fuzz/` (`mp4_box_reader`, `ts_packet`, `mkv_ebml`) for
   crash-resistance of demuxers (`cargo +nightly fuzz run …`).
-- ⬜ Live network key servers (Widevine/PlayReady): still deferred — requires
-  client certificates and a live endpoint (Phase 2 external-service dependency).
+- ✅ Widevine key-server client + CPIX/SPEKE (optional live endpoints).
 
 ---
 
@@ -192,13 +191,12 @@ servers (an external-service dependency, see below).
 packager with multi-format segments, encryption, broad inputs, IO push, and a
 JIT origin demo.
 
-**Deferred (not blocking 0.5.0):** live DRM license-server clients, continuous
-live origin rewrite loop beyond JIT HTTP, and Ogg/Vorbis (CMAF has no sample
-entry; Shaka rejects it too).
+**Deferred:** Ogg/Vorbis (CMAF has no sample entry; Shaka rejects it too).
+Widevine/CPIX, HTTPS push, origin TLS/auth, live-rewrite, stream descriptors,
+and HLS/DASH knobs shipped after 0.6.0.
 
-**Next after 0.5.0:** harden oracle coverage for Phase 4/5 paths, expand
-corpus, production-grade origin (TLS, auth), and optional HTTPS push with a
-TLS backend.
+**Next:** oracle coverage for the new DRM/IO paths, CBC decrypt of encrypted
+inputs, and rustls `--disable-peer-verification` as a real danger-flag.
 
 **Vorbis** remains explicitly out of scope — CMAF has no standard Vorbis sample
 entry and Shaka Packager rejects it too.

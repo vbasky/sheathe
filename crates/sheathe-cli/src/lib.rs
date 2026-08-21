@@ -14,12 +14,13 @@
 //! Full end-user command documentation: the repository's `docs/CLI.md`.
 
 mod banner;
+mod help;
 
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, Parser, Subcommand, ValueEnum};
 use sheathe_package::{
-    DrmSystem, EncScheme, EncryptionSpec, OriginConfig, PackageOptions, PresentationMode,
-    Scte35Marker, SegmentFormat,
+    CpixConfig, DrmSystem, EncScheme, EncryptionSpec, OriginConfig, PackageKnobs, PackageOptions,
+    PresentationMode, Scte35Marker, SegmentFormat, WidevineConfig, parse_input_arg,
 };
 use std::path::{Path, PathBuf};
 
@@ -29,11 +30,13 @@ use std::path::{Path, PathBuf};
     name = "sheathe",
     version,
     about = "Pure-Rust HLS/DASH/CMAF media packager",
-    long_about = None
+    long_about = help::ROOT_LONG_ABOUT,
+    after_long_help = help::ROOT_AFTER_HELP,
+    arg_required_else_help = true
 )]
 struct Cli {
     /// Suppress the startup banner.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, long_help = help::NO_BANNER)]
     no_banner: bool,
 
     #[command(subcommand)]
@@ -79,26 +82,41 @@ enum Command {
     /// Package one or more inputs into CMAF segments + DASH and/or HLS
     /// manifests. Multiple inputs form an ABR ladder (one rendition each),
     /// unless `--multi-period` is set.
+    #[command(
+        long_about = help::PACKAGE_LONG_ABOUT,
+        after_long_help = help::PACKAGE_AFTER_HELP
+    )]
     Package(Box<PackageArgs>),
     /// Probe an input and print the streams sheathe detects.
+    #[command(long_about = help::PROBE_LONG_ABOUT, after_long_help = help::PROBE_AFTER_HELP)]
     Probe {
-        /// Input media file.
+        /// Input media file (same formats as `package`). No packaging is performed.
         input: String,
     },
     /// Run a JIT HTTP origin that packages on request.
+    #[command(long_about = help::ORIGIN_LONG_ABOUT, after_long_help = help::ORIGIN_AFTER_HELP)]
     Origin {
         /// Bind address (default `127.0.0.1:8787`).
-        #[arg(long, default_value = "127.0.0.1:8787")]
+        #[arg(long, default_value = "127.0.0.1:8787", long_help = help::ORIGIN_BIND)]
         bind: String,
         /// Sandbox root for `input=` paths.
-        #[arg(long, default_value = ".")]
+        #[arg(long, default_value = ".", long_help = help::ORIGIN_MEDIA_ROOT)]
         media_root: String,
         /// Cache directory for packaged outputs.
-        #[arg(long, default_value = "/tmp/sheathe-origin")]
+        #[arg(long, default_value = "/tmp/sheathe-origin", long_help = help::ORIGIN_CACHE_DIR)]
         cache_dir: String,
         /// Default segment duration for JIT packages.
-        #[arg(long, default_value_t = 6.0)]
+        #[arg(long, default_value_t = 6.0, long_help = help::ORIGIN_SEGMENT_DURATION)]
         segment_duration: f64,
+        /// TLS certificate PEM (enables HTTPS).
+        #[arg(long, help_heading = "Live / IO")]
+        tls_cert: Option<String>,
+        /// TLS private key PEM.
+        #[arg(long, help_heading = "Live / IO")]
+        tls_key: Option<String>,
+        /// HTTP Basic auth as `user:password`.
+        #[arg(long, help_heading = "Live / IO")]
+        auth: Option<String>,
     },
 }
 
@@ -106,83 +124,247 @@ enum Command {
 #[derive(Debug, Parser)]
 struct PackageArgs {
     /// Input media file(s). Each becomes its own rendition(s).
-    #[arg(required = true, num_args = 1..)]
+    #[arg(required = true, num_args = 1.., long_help = help::INPUTS, help_heading = "Arguments")]
     inputs: Vec<String>,
     /// Output directory.
-    #[arg(short, long, default_value = "out")]
+    #[arg(short, long, default_value = "out", long_help = help::OUT, help_heading = "Output")]
     out: String,
     /// Target segment duration in seconds.
-    #[arg(long, default_value_t = 6.0)]
+    #[arg(
+        long,
+        default_value_t = 6.0,
+        long_help = help::SEGMENT_DURATION,
+        help_heading = "Output"
+    )]
     segment_duration: f64,
     /// Emit a DASH manifest (`manifest.mpd`).
-    #[arg(long)]
+    #[arg(long, long_help = help::DASH, help_heading = "Output")]
     dash: bool,
     /// Emit HLS playlists (`master.m3u8`).
-    #[arg(long)]
+    #[arg(long, long_help = help::HLS, help_heading = "Output")]
     hls: bool,
+    /// Segment container: `cmaf` (default), `ts` (MPEG-TS), or `packed-audio`.
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliSegmentFormat::Cmaf,
+        long_help = help::FORMAT,
+        help_heading = "Output"
+    )]
+    format: CliSegmentFormat,
+    /// DASH on-demand single-file output (`SegmentList` byte ranges).
+    #[arg(long, long_help = help::ON_DEMAND, help_heading = "Output")]
+    on_demand: bool,
+    /// Parallelise per-track packaging across threads.
+    #[arg(long, long_help = help::PARALLEL, help_heading = "Output")]
+    parallel: bool,
+    /// After writing locally, HTTP PUT every object to this base URL.
+    #[arg(long, value_name = "URL", long_help = help::HTTP_PUSH, help_heading = "Output")]
+    http_push: Option<String>,
     /// Presentation mode: `vod` (default), `event`, or `live`.
-    #[arg(long, value_enum, default_value_t = CliPresentation::Vod)]
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = CliPresentation::Vod,
+        long_help = help::PRESENTATION,
+        help_heading = "Presentation"
+    )]
     presentation: CliPresentation,
     /// Live/event sliding-window size in segments (default: 3 for live).
-    #[arg(long, value_name = "N")]
+    #[arg(long, value_name = "N", long_help = help::LIVE_WINDOW, help_heading = "Presentation")]
     live_window: Option<usize>,
     /// Treat each input as a successive DASH Period instead of an ABR ladder.
-    #[arg(long)]
+    #[arg(long, long_help = help::MULTI_PERIOD, help_heading = "Presentation")]
     multi_period: bool,
     /// Emit trick-play (I-frame) tracks / playlists for video.
-    #[arg(long)]
+    #[arg(long, long_help = help::TRICK_PLAY, help_heading = "Presentation")]
     trick_play: bool,
     /// Low-latency packaging (LL-HLS parts + LL-DASH availabilityTimeOffset).
-    #[arg(long)]
+    #[arg(long, long_help = help::LOW_LATENCY, help_heading = "Presentation")]
     low_latency: bool,
     /// Part target duration in seconds when `--low-latency` is set (default 1).
-    #[arg(long, value_name = "SECONDS")]
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        long_help = help::PART_DURATION,
+        help_heading = "Presentation"
+    )]
     part_duration: Option<f64>,
     /// Wall-clock availability start (ISO-8601, e.g. `2026-07-18T00:00:00Z`).
     /// Defaults to now for live/event.
-    #[arg(long, value_name = "ISO8601")]
+    #[arg(
+        long,
+        value_name = "ISO8601",
+        long_help = help::AVAILABILITY_START_TIME,
+        help_heading = "Presentation"
+    )]
     availability_start_time: Option<String>,
-    /// SCTE-35 marker as `TIME[:out|in][:BREAK_DUR]`. TIME is seconds from
-    /// period start. Repeatable. Example: `--scte35 30:out:15 --scte35 45:in`.
-    #[arg(long = "scte35", value_name = "SPEC", action = clap::ArgAction::Append)]
+    /// SCTE-35 marker as `TIME[:out|in][:BREAK_DUR]`. Repeatable.
+    #[arg(
+        long = "scte35",
+        value_name = "SPEC",
+        action = clap::ArgAction::Append,
+        long_help = help::SCTE35,
+        help_heading = "Presentation"
+    )]
     scte35: Vec<String>,
     /// Encrypt using a raw key, as `<KID hex>:<KEY hex>` (both 16 bytes /
     /// 32 hex chars).
-    #[arg(long, value_name = "KID:KEY")]
+    #[arg(long, value_name = "KID:KEY", long_help = help::ENC_KEY, help_heading = "Encryption")]
     enc_key: Option<String>,
-    /// Read the raw key from a file (a `<KID hex>:<KEY hex>` line; `#`
-    /// comments and blank lines ignored). Takes precedence over `--enc-key`
-    /// and keeps the key out of the process arguments.
-    #[arg(long, value_name = "PATH")]
+    /// Read the raw key from a file. Takes precedence over `--enc-key`.
+    #[arg(long, value_name = "PATH", long_help = help::ENC_KEY_FILE, help_heading = "Encryption")]
     enc_key_file: Option<String>,
-    /// Encryption scheme when `--enc-key` is set: `cenc` (AES-CTR),
-    /// `cens` (AES-CTR pattern), `cbc1` (AES-CBC) or `cbcs` (AES-CBC pattern).
-    #[arg(long, default_value = "cenc")]
+    /// Encryption scheme when a key is set: `cenc`, `cens`, `cbc1`, or `cbcs`.
+    #[arg(long, default_value = "cenc", long_help = help::ENC_SCHEME, help_heading = "Encryption")]
     enc_scheme: String,
     /// Key-delivery URI written into the HLS `#EXT-X-KEY` tag when encrypting.
-    #[arg(long, default_value = "key.bin")]
+    #[arg(
+        long,
+        default_value = "key.bin",
+        long_help = help::ENC_KEY_URI,
+        help_heading = "Encryption"
+    )]
     enc_key_uri: String,
-    /// DRM systems to emit `pssh` boxes for (comma-separated): any of
-    /// `common`, `widevine`, `playready`.
-    #[arg(long, default_value = "common")]
+    /// DRM systems to emit `pssh` boxes for: `common`, `widevine`, `playready`.
+    #[arg(
+        long,
+        default_value = "common",
+        long_help = help::PROTECTION_SYSTEMS,
+        help_heading = "Encryption"
+    )]
     protection_systems: String,
-    /// Enable key rotation with this crypto-period duration in seconds. Each
-    /// period uses a key derived from the base key; signalled per segment via
-    /// `seig` sample groups and per-period `pssh`.
-    #[arg(long, value_name = "SECONDS")]
+    /// Enable key rotation with this crypto-period duration in seconds.
+    #[arg(
+        long,
+        value_name = "SECONDS",
+        long_help = help::CRYPTO_PERIOD_DURATION,
+        help_heading = "Encryption"
+    )]
     crypto_period_duration: Option<f64>,
-    /// Segment container: `cmaf` (default), `ts` (MPEG-TS), or `packed-audio`.
-    #[arg(long, value_enum, default_value_t = CliSegmentFormat::Cmaf)]
-    format: CliSegmentFormat,
-    /// DASH on-demand single-file output (`SegmentList` byte ranges).
-    #[arg(long)]
-    on_demand: bool,
-    /// Parallelise per-track packaging across threads.
-    #[arg(long)]
-    parallel: bool,
-    /// After writing locally, HTTP PUT every object to this base URL.
-    #[arg(long, value_name = "URL")]
-    http_push: Option<String>,
+    #[command(flatten)]
+    extra: ExtraKnobs,
+}
+
+/// Shaka-parity knobs (HLS/DASH, DRM extras, Live/IO).
+#[derive(Debug, Parser)]
+struct ExtraKnobs {
+    /// HLS base URL prefix for playlist URIs.
+    #[arg(long, help_heading = "HLS/DASH")]
+    hls_base_url: Option<String>,
+    /// Initial EXT-X-MEDIA-SEQUENCE.
+    #[arg(long, default_value_t = 0, help_heading = "HLS/DASH")]
+    hls_media_sequence_number: u64,
+    /// EXT-X-START TIME-OFFSET in seconds.
+    #[arg(long, help_heading = "HLS/DASH")]
+    hls_start_time_offset: Option<f64>,
+    /// Emit EXT-X-SESSION-KEY in the master playlist.
+    #[arg(long, help_heading = "HLS/DASH")]
+    create_session_keys: bool,
+    /// Add EXT-X-PROGRAM-DATE-TIME on every segment.
+    #[arg(long, help_heading = "HLS/DASH")]
+    add_program_date_time: bool,
+    /// CEA closed captions: channel=CC1,name=English,lang=eng;…
+    #[arg(long, help_heading = "HLS/DASH")]
+    closed_captions: Option<String>,
+    /// Use legacy `vp9` codec string instead of `vp09.…`.
+    #[arg(long, help_heading = "HLS/DASH")]
+    use_legacy_vp9_codec_string: bool,
+    /// DASH-IF last-segment-number SupplementalProperty.
+    #[arg(long, help_heading = "HLS/DASH")]
+    dash_add_last_segment_number: bool,
+    /// SegmentTemplate@duration when durations are uniform.
+    #[arg(long, help_heading = "HLS/DASH")]
+    segment_template_constant_duration: bool,
+    /// Signal Dolby Vision via supplemental codecs.
+    #[arg(long, help_heading = "HLS/DASH")]
+    use_dovi_supplemental_codecs: bool,
+    /// Write mvex before trak (Android MediaExtractor).
+    #[arg(long, help_heading = "HLS/DASH")]
+    mvex_before_trak: bool,
+    /// Pattern crypt byte blocks (cbcs/cens). Default 1.
+    #[arg(long, default_value_t = 1, help_heading = "Encryption")]
+    crypt_byte_block: u8,
+    /// Pattern skip byte blocks (cbcs/cens). Default 9.
+    #[arg(long, default_value_t = 9, help_heading = "Encryption")]
+    skip_byte_block: u8,
+    /// Extra XML inside the PlayReady WRMHEADER.
+    #[arg(long, help_heading = "Encryption")]
+    playready_extra_header_data: Option<String>,
+    /// Labeled keys: label=AUDIO:key_id=hex:key=hex,label=SD:…
+    #[arg(long, help_heading = "Encryption")]
+    keys: Option<String>,
+    /// Decrypt CENC inputs with the raw key before re-packaging.
+    #[arg(long, help_heading = "Encryption")]
+    decrypt: bool,
+    /// CPIX document path or URL.
+    #[arg(long, help_heading = "Encryption")]
+    cpix: Option<String>,
+    /// SPEKE: POST this CPIX request file to --cpix URL.
+    #[arg(long, help_heading = "Encryption")]
+    cpix_request_file: Option<String>,
+    /// RSA private key (PEM) for encrypted CPIX documents.
+    #[arg(long, help_heading = "Encryption")]
+    cpix_private_key: Option<String>,
+    /// Widevine key-server URL.
+    #[arg(long, help_heading = "Encryption")]
+    key_server_url: Option<String>,
+    /// Enable Widevine encryption (fetch keys from --key-server-url).
+    #[arg(long, help_heading = "Encryption")]
+    enable_widevine_encryption: bool,
+    /// Enable Widevine decryption.
+    #[arg(long, help_heading = "Encryption")]
+    enable_widevine_decryption: bool,
+    /// Widevine content id (hex).
+    #[arg(long, help_heading = "Encryption")]
+    content_id: Option<String>,
+    /// Widevine signer name.
+    #[arg(long, help_heading = "Encryption")]
+    signer: Option<String>,
+    /// AES-256 signing key (hex) for Widevine.
+    #[arg(long, help_heading = "Encryption")]
+    aes_signing_key: Option<String>,
+    /// AES signing IV (hex) for Widevine.
+    #[arg(long, help_heading = "Encryption")]
+    aes_signing_iv: Option<String>,
+    /// PKCS#1/PKCS#8 RSA private key path for Widevine.
+    #[arg(long, help_heading = "Encryption")]
+    rsa_signing_key_path: Option<String>,
+    /// Widevine policy name.
+    #[arg(long, help_heading = "Encryption")]
+    policy: Option<String>,
+    /// Ignore HTTP PUT failures (live ingest).
+    #[arg(long, help_heading = "Live / IO")]
+    ignore_http_output_failures: bool,
+    /// Custom User-Agent for HTTP(S).
+    #[arg(long, help_heading = "Live / IO")]
+    user_agent: Option<String>,
+    /// Extra CA file (PEM) for TLS.
+    #[arg(long, help_heading = "Live / IO")]
+    ca_file: Option<String>,
+    /// Client certificate (PEM) for TLS.
+    #[arg(long, help_heading = "Live / IO")]
+    client_cert_file: Option<String>,
+    /// Client certificate private key (PEM).
+    #[arg(long, help_heading = "Live / IO")]
+    client_cert_private_key_file: Option<String>,
+    /// Skip adding extra TLS checks (roots still enforced).
+    #[arg(long, help_heading = "Live / IO")]
+    disable_peer_verification: bool,
+    /// Rewrite live manifests in a loop until interrupted.
+    #[arg(long, help_heading = "Live / IO")]
+    live_rewrite: bool,
+}
+
+/// True when the user ran `sheathe` (optionally with `--no-banner`) and nothing
+/// else. Clap treats a missing subcommand as an error (stderr + exit 2); we
+/// print help to stdout and succeed instead, matching `sheathe --help`.
+fn is_bare_invocation<I, S>(args: I) -> bool
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter().skip(1).all(|a| a.as_ref() == "--no-banner")
 }
 
 /// Parse CLI args and run the requested command.
@@ -191,6 +373,12 @@ pub fn run() -> Result<()> {
     // returning, so the banner must be printed first.
     if !std::env::args().any(|a| a == "--no-banner") {
         banner::print();
+    }
+
+    if is_bare_invocation(std::env::args()) {
+        Cli::command().print_help()?;
+        println!();
+        return Ok(());
     }
 
     let cli = Cli::parse();
@@ -214,6 +402,7 @@ pub fn run() -> Result<()> {
             on_demand: p.on_demand,
             parallel: p.parallel,
             http_push: p.http_push.as_deref(),
+            extra: &p.extra,
             enc: EncryptionArgs {
                 key: p.enc_key.as_deref(),
                 key_file: p.enc_key_file.as_deref(),
@@ -224,12 +413,23 @@ pub fn run() -> Result<()> {
             },
         })?,
         Command::Probe { input } => cmd_probe(&input)?,
-        Command::Origin { bind, media_root, cache_dir, segment_duration } => {
+        Command::Origin {
+            bind,
+            media_root,
+            cache_dir,
+            segment_duration,
+            tls_cert,
+            tls_key,
+            auth,
+        } => {
             sheathe_package::serve_origin(OriginConfig {
                 bind,
                 media_root: PathBuf::from(media_root),
                 cache_dir: PathBuf::from(cache_dir),
                 segment_duration,
+                tls_cert: tls_cert.map(PathBuf::from),
+                tls_key: tls_key.map(PathBuf::from),
+                basic_auth: auth,
             })?;
         }
     }
@@ -240,15 +440,13 @@ pub fn run() -> Result<()> {
 /// Read an input file and print the streams sheathe detects.
 fn cmd_probe(input: &str) -> Result<()> {
     let report = sheathe_package::probe(Path::new(input))?;
-    println!(
-        "probe: {input}  ({} bytes, {} track(s), {})",
-        report.size_bytes,
-        report.streams.len(),
-        report.format
-    );
+    println!("File \"{input}\":");
+    println!(" container: {}", report.format);
+    println!(" size: {} bytes", report.size_bytes);
+    println!("Found {} stream(s).", report.streams.len());
     for (i, s) in report.streams.iter().enumerate() {
-        println!("  [{}] track #{}  {}", i, s.track_id, sheathe_package::describe(&s.info));
-        println!("       samples={}  timescale={}", s.sample_count, s.info.timescale.0);
+        println!();
+        println!("{}", sheathe_package::dump_stream(i, s));
     }
     Ok(())
 }
@@ -263,6 +461,7 @@ struct EncryptionArgs<'a> {
 }
 
 struct PackageCli<'a> {
+    extra: &'a ExtraKnobs,
     inputs: &'a [String],
     out: &'a str,
     segment_duration: f64,
@@ -298,7 +497,14 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
                 args.enc.crypto_period,
             )
         })
-        .transpose()?;
+        .transpose()?
+        .map(|mut e| {
+            e.hls_aes128 = args.enc.scheme == "aes128";
+            e.crypt_byte_block = args.extra.crypt_byte_block;
+            e.skip_byte_block = args.extra.skip_byte_block;
+            e.playready_extra = args.extra.playready_extra_header_data.clone();
+            e
+        });
 
     let markers = args.scte35.iter().map(|s| parse_scte35(s)).collect::<Result<Vec<_>>>()?;
 
@@ -307,25 +513,46 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
         PresentationMode::Event => "event",
         PresentationMode::Live => "live",
     };
+    let format = match args.segment_format {
+        SegmentFormat::Cmaf => "cmaf",
+        SegmentFormat::MpegTs => "ts",
+        SegmentFormat::PackedAudio => "packed-audio",
+    };
+    let manifests = match (args.dash, args.hls) {
+        (true, true) => "DASH (manifest.mpd), HLS (master.m3u8)",
+        (true, false) => "DASH (manifest.mpd)",
+        (false, true) => "HLS (master.m3u8)",
+        (false, false) => "none (segments only)",
+    };
+
     println!("package: {} input(s) -> {}/", args.inputs.len(), args.out);
-    println!(
-        "  segment_duration = {}s  (dash={}, hls={}, presentation={mode})",
-        args.segment_duration, args.dash, args.hls
-    );
+    for (i, input) in args.inputs.iter().enumerate() {
+        println!("  input[{i}]: {input}");
+    }
+    println!("  segment_duration: {}s", args.segment_duration);
+    println!("  format:           {format}");
+    println!("  presentation:     {mode}");
+    println!("  manifests:        {manifests}");
     if args.multi_period {
-        println!("  multi_period = true");
+        println!("  multi_period:     true (each input is a DASH Period)");
     }
     if args.trick_play {
-        println!("  trick_play = true");
+        println!("  trick_play:       true (I-frame tracks / playlists)");
     }
     if args.low_latency {
-        println!("  low_latency = true  (part_duration = {}s)", args.part_duration.unwrap_or(1.0));
+        println!(
+            "  low_latency:      true (part_duration = {}s)",
+            args.part_duration.unwrap_or(1.0)
+        );
     }
     if let Some(w) = args.live_window {
-        println!("  live_window = {w} segment(s)");
+        println!("  live_window:      {w} segment(s)");
+    }
+    if let Some(t) = args.availability_start_time {
+        println!("  availability_start_time: {t}");
     }
     if !markers.is_empty() {
-        println!("  scte35 markers = {}", markers.len());
+        println!("  scte35:           {} marker(s)", markers.len());
     }
     if encryption.is_some() {
         let alg = match args.enc.scheme {
@@ -334,29 +561,102 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
             "cbcs" => "cbcs (AES-128-CBC pattern)",
             _ => "cenc (AES-128-CTR)",
         };
-        println!("  encryption = {alg}");
-        println!("  protection_systems = {}", args.enc.systems);
+        println!("  encryption:       {alg}");
+        println!("  protection_systems: {}", args.enc.systems);
+        println!("  enc_key_uri:      {}", args.enc.key_uri);
         if let Some(p) = args.enc.crypto_period {
-            println!("  key_rotation = every {p}s (crypto period)");
+            println!("  key_rotation:     every {p}s (crypto period)");
         }
     }
-
-    let input_paths: Vec<PathBuf> = args.inputs.iter().map(PathBuf::from).collect();
     if args.on_demand {
-        println!("  on_demand = true (DASH SegmentList single-file)");
+        println!("  on_demand:        true (DASH SegmentList single-file)");
     }
     if args.parallel {
-        println!("  parallel = true");
+        println!("  parallel:         true");
     }
     if let Some(u) = args.http_push {
-        println!("  http_push = {u}");
-    }
-    match args.segment_format {
-        SegmentFormat::Cmaf => {}
-        SegmentFormat::MpegTs => println!("  format = mpeg-ts"),
-        SegmentFormat::PackedAudio => println!("  format = packed-audio"),
+        println!("  http_push:        {u}");
     }
 
+    let descriptors: Vec<_> =
+        args.inputs.iter().map(|s| parse_input_arg(s)).collect::<Result<_>>()?;
+    let input_paths: Vec<PathBuf> = descriptors.iter().map(|d| d.input.clone()).collect();
+    let extra = args.extra;
+    let mut knobs = PackageKnobs {
+        hls_base_url: extra.hls_base_url.clone(),
+        hls_media_sequence_number: extra.hls_media_sequence_number,
+        hls_start_time_offset: extra.hls_start_time_offset,
+        create_session_keys: extra.create_session_keys,
+        add_program_date_time: extra.add_program_date_time,
+        closed_captions: extra
+            .closed_captions
+            .as_deref()
+            .map(sheathe_package::ClosedCaption::parse_list)
+            .transpose()?
+            .unwrap_or_default(),
+        use_legacy_vp9_codec_string: extra.use_legacy_vp9_codec_string,
+        dash_add_last_segment_number: extra.dash_add_last_segment_number,
+        segment_template_constant_duration: extra.segment_template_constant_duration,
+        use_dovi_supplemental_codecs: extra.use_dovi_supplemental_codecs,
+        mvex_before_trak: extra.mvex_before_trak,
+        crypt_byte_block: extra.crypt_byte_block,
+        skip_byte_block: extra.skip_byte_block,
+        playready_extra_header_data: extra.playready_extra_header_data.clone(),
+        hls_aes128: args.enc.scheme == "aes128",
+        labeled_keys: extra
+            .keys
+            .as_deref()
+            .map(sheathe_package::LabeledKey::parse_list)
+            .transpose()?
+            .unwrap_or_default(),
+        decrypt_input: extra.decrypt || extra.enable_widevine_decryption,
+        ignore_http_output_failures: extra.ignore_http_output_failures,
+        user_agent: extra.user_agent.clone(),
+        ca_file: extra.ca_file.as_ref().map(PathBuf::from),
+        client_cert_file: extra.client_cert_file.as_ref().map(PathBuf::from),
+        client_cert_key_file: extra.client_cert_private_key_file.as_ref().map(PathBuf::from),
+        disable_peer_verification: extra.disable_peer_verification,
+        live_rewrite: extra.live_rewrite,
+        descriptors,
+        ..PackageKnobs::default()
+    };
+    if extra.enable_widevine_encryption || extra.enable_widevine_decryption {
+        let url = extra.key_server_url.clone().context("--key-server-url required")?;
+        knobs.widevine = Some(WidevineConfig {
+            key_server_url: url,
+            content_id: extra
+                .content_id
+                .as_deref()
+                .map(parse_hex_bytes)
+                .transpose()?
+                .unwrap_or_default(),
+            signer: extra.signer.clone().unwrap_or_default(),
+            aes_signing_key: extra.aes_signing_key.as_deref().map(parse_hex_bytes).transpose()?,
+            aes_signing_iv: extra.aes_signing_iv.as_deref().map(parse_hex_bytes).transpose()?,
+            rsa_signing_key_pem: extra
+                .rsa_signing_key_path
+                .as_ref()
+                .map(std::fs::read_to_string)
+                .transpose()?,
+            policy: extra.policy.clone().unwrap_or_default(),
+            group_id: None,
+            enable_entitlement_license: false,
+            decrypt: extra.enable_widevine_decryption,
+        });
+    }
+    if let Some(cpix) = &extra.cpix {
+        knobs.cpix = Some(CpixConfig {
+            path_or_url: cpix.clone(),
+            headers: Vec::new(),
+            private_key_pem: extra
+                .cpix_private_key
+                .as_ref()
+                .and_then(|p| std::fs::read_to_string(p).ok()),
+            request_file: extra.cpix_request_file.as_ref().map(PathBuf::from),
+            encrypt: true,
+            decrypt: extra.decrypt,
+        });
+    }
     let opts = PackageOptions {
         out_dir: PathBuf::from(args.out),
         segment_duration: args.segment_duration,
@@ -375,21 +675,41 @@ fn cmd_package(args: PackageCli<'_>) -> Result<()> {
         on_demand: args.on_demand,
         parallel: args.parallel,
         http_push_url: args.http_push.map(str::to_string),
+        knobs,
     };
-    let output = sheathe_package::package(&input_paths, &opts)?;
+    let output = if extra.live_rewrite {
+        loop {
+            let out = sheathe_package::package(&input_paths, &opts)?;
+            eprintln!(
+                "live-rewrite: {} rendition(s), sleeping {}s (Ctrl-C to stop)",
+                out.renditions, opts.segment_duration
+            );
+            std::thread::sleep(std::time::Duration::from_secs_f64(opts.segment_duration.max(0.2)));
+        }
+    } else {
+        sheathe_package::package(&input_paths, &opts)?
+    };
 
+    println!();
     println!(
-        "  {} rendition(s), {:.2}s, {} segment(s)",
+        "  {} rendition(s), {:.3}s, {} media segment(s)",
         output.renditions,
         output.duration_seconds,
         output.media_segments.len(),
     );
+    if !output.init_segments.is_empty() {
+        println!("  init:");
+        for p in &output.init_segments {
+            println!("    {}", p.display());
+        }
+    }
     if let Some(p) = &output.dash_manifest {
-        println!("  wrote {}", p.display());
+        println!("  dash:             {}", p.display());
     }
     if let Some(p) = &output.hls_master {
-        println!("  wrote {} (+ per-track media playlists)", p.display());
+        println!("  hls:              {} (+ per-track media playlists)", p.display());
     }
+    println!("Packaging completed successfully.");
 
     Ok(())
 }
@@ -442,8 +762,11 @@ fn parse_enc_key(
         "cens" => EncScheme::Cens,
         "cbc1" => EncScheme::Cbc1,
         "cbcs" => EncScheme::Cbcs,
+        "aes128" => EncScheme::Cenc, // actual AES-128 is flagged via hls_aes128
         other => {
-            anyhow::bail!("unknown --enc-scheme '{other}' (expected cenc, cens, cbc1 or cbcs)")
+            anyhow::bail!(
+                "unknown --enc-scheme '{other}' (expected cenc, cens, cbc1, cbcs, aes128)"
+            )
         }
     };
     let systems = parse_protection_systems(systems)?;
@@ -457,6 +780,10 @@ fn parse_enc_key(
         key_uri: key_uri.to_string(),
         systems,
         crypto_period_seconds: crypto_period,
+        hls_aes128: false,
+        crypt_byte_block: 1,
+        skip_byte_block: 9,
+        playready_extra: None,
     })
 }
 
@@ -483,6 +810,15 @@ fn parse_protection_systems(list: &str) -> Result<Vec<DrmSystem>> {
         .collect()
 }
 
+fn parse_hex_bytes(s: &str) -> Result<Vec<u8>> {
+    let s = s.trim().trim_start_matches("0x");
+    anyhow::ensure!(s.len() % 2 == 0, "hex string must have even length");
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&s[i..i + 2], 16).context("non-hex digit"))
+        .collect()
+}
+
 fn parse_hex16(s: &str) -> Result<[u8; 16]> {
     let s = s.trim();
     anyhow::ensure!(s.len() == 32, "expected 32 hex chars, got {}", s.len());
@@ -491,4 +827,66 @@ fn parse_hex16(s: &str) -> Result<[u8; 16]> {
         *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).context("non-hex digit")?;
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, is_bare_invocation};
+    use clap::CommandFactory;
+
+    #[test]
+    fn bare_invocation_is_just_the_binary() {
+        assert!(is_bare_invocation(["sheathe"]));
+        assert!(is_bare_invocation(["sheathe", "--no-banner"]));
+        assert!(!is_bare_invocation(["sheathe", "--help"]));
+        assert!(!is_bare_invocation(["sheathe", "probe", "in.mp4"]));
+        assert!(!is_bare_invocation(["sheathe", "--no-banner", "probe", "in.mp4"]));
+    }
+
+    fn long_help(subcommand: &str) -> String {
+        let mut cmd = Cli::command();
+        let sub = cmd.find_subcommand_mut(subcommand).expect(subcommand);
+        let mut buf = Vec::new();
+        sub.write_long_help(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    }
+
+    #[test]
+    fn package_long_help_is_descriptive() {
+        let help = long_help("package");
+        for needle in [
+            "Output:",
+            "Presentation:",
+            "Encryption:",
+            "stream_descriptor",
+            "--mpd_output",
+            "--hls_master_playlist_output",
+            "--protection_scheme",
+            "--segment_duration",
+        ] {
+            assert!(help.contains(needle), "missing {needle:?} in package --help");
+        }
+    }
+
+    #[test]
+    fn probe_long_help_mentions_shaka_dump() {
+        let help = long_help("probe");
+        assert!(help.contains("dump_stream_info"), "{help}");
+    }
+
+    #[test]
+    fn origin_long_help_documents_http_api() {
+        let help = long_help("origin");
+        assert!(help.contains("/package?input="), "{help}");
+        assert!(help.contains("/health"), "{help}");
+    }
+
+    #[test]
+    fn root_long_help_contrasts_shaka_descriptors() {
+        let mut buf = Vec::new();
+        Cli::command().write_long_help(&mut buf).unwrap();
+        let help = String::from_utf8(buf).unwrap();
+        assert!(help.contains("stream descriptor"), "{help}");
+        assert!(help.contains("packager"), "{help}");
+    }
 }

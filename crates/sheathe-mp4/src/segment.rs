@@ -30,6 +30,19 @@ pub struct Encryption {
     /// Crypto-period duration in seconds for key rotation, or `None` to use one
     /// key for the whole asset.
     pub crypto_period_seconds: Option<f64>,
+    /// Pattern crypt-block count (`--crypt_byte_block`). Default 1.
+    pub crypt_byte_block: u8,
+    /// Pattern skip-block count (`--skip_byte_block`). Default 9.
+    pub skip_byte_block: u8,
+    /// Extra XML spliced into the PlayReady WRMHEADER.
+    pub playready_extra: Option<String>,
+}
+
+/// Muxer layout knobs (Shaka `--mvex_before_trak`, language in `mdhd`).
+#[derive(Debug, Clone, Default)]
+pub struct MuxOptions {
+    /// Write `mvex` before `trak` (Android MediaExtractor).
+    pub mvex_before_trak: bool,
 }
 
 impl Encryption {
@@ -61,7 +74,11 @@ impl Encryption {
 /// (`cens`/`cbcs`) is applied to video only; audio (and the non-pattern schemes)
 /// use [`Pattern::NONE`] — matching Shaka Packager / DASH-IF convention.
 fn track_pattern(enc: &Encryption, kind: MediaKind) -> Pattern {
-    if enc.scheme.is_pattern() && kind == MediaKind::Video { Pattern::VIDEO } else { Pattern::NONE }
+    if enc.scheme.is_pattern() && kind == MediaKind::Video {
+        Pattern::from_blocks(enc.crypt_byte_block.max(1), enc.skip_byte_block)
+    } else {
+        Pattern::NONE
+    }
 }
 
 /// Per-sample encryption result: IV, subsample layout, and encrypted bytes.
@@ -81,6 +98,16 @@ fn fcc(s: &[u8; 4]) -> FourCc {
     FourCc(*s)
 }
 
+/// Pack an ISO-639-2/T code into `mdhd` language (5 bits per char). Default `und`.
+fn mdhd_language(tag: Option<&str>) -> u16 {
+    let b = tag.unwrap_or("und").as_bytes();
+    if b.len() < 3 {
+        return 0x55c4;
+    }
+    let pack = |c: u8| u16::from(c.saturating_sub(0x60)) & 0x1f;
+    (pack(b[0]) << 10) | (pack(b[1]) << 5) | pack(b[2])
+}
+
 /// Write a full-box version/flags word.
 fn full(w: &mut BoxWriter, version: u8, flags: u32) {
     w.u32((u32::from(version) << 24) | (flags & 0x00ff_ffff));
@@ -91,9 +118,18 @@ fn full(w: &mut BoxWriter, version: u8, flags: u32) {
 /// When `enc` is set, the sample entry is wrapped as `encv`/`enca` with a `sinf`
 /// (`frma`/`schm`/`tenc`) and a `pssh` is added to `moov`.
 pub fn write_init_segment(track: &Track, enc: Option<&Encryption>) -> Vec<u8> {
+    write_init_segment_opts(track, enc, &MuxOptions::default())
+}
+
+/// [`write_init_segment`] with mux layout knobs.
+pub fn write_init_segment_opts(
+    track: &Track,
+    enc: Option<&Encryption>,
+    mux: &MuxOptions,
+) -> Vec<u8> {
     let mut w = BoxWriter::new();
     write_ftyp(&mut w);
-    write_moov(&mut w, track, enc);
+    write_moov(&mut w, track, enc, mux);
     w.into_bytes()
 }
 
@@ -133,7 +169,30 @@ fn write_ftyp(w: &mut BoxWriter) {
     w.end();
 }
 
-fn write_moov(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>) {
+fn write_mvex(w: &mut BoxWriter, track: &Track) {
+    w.begin(fcc(b"mvex"));
+    w.begin(fcc(b"trex"));
+    full(w, 0, 0);
+    w.u32(track.track_id);
+    w.u32(1); // default_sample_description_index
+    w.u32(0); // default_sample_duration
+    w.u32(0); // default_sample_size
+    w.u32(0); // default_sample_flags
+    w.end();
+    w.end();
+}
+
+fn write_pssh(w: &mut BoxWriter, enc: Option<&Encryption>) {
+    if let Some(e) = enc {
+        if e.crypto_period_seconds.is_none() {
+            for system in &e.systems {
+                w.bytes(&system.pssh_box_ex(&e.key, e.scheme, e.playready_extra.as_deref()));
+            }
+        }
+    }
+}
+
+fn write_moov(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>, mux: &MuxOptions) {
     w.begin(fcc(b"moov"));
 
     // mvhd (version 0)
@@ -157,30 +216,15 @@ fn write_moov(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>) {
     w.u32(track.track_id + 1); // next_track_id
     w.end();
 
-    write_trak(w, track, enc);
-
-    // One `pssh` box per requested DRM system, appended verbatim into `moov`.
-    // Under key rotation the `pssh` boxes move into each segment's `moof`
-    // instead (one per period, with that period's KID).
-    if let Some(e) = enc {
-        if e.crypto_period_seconds.is_none() {
-            for system in &e.systems {
-                w.bytes(&system.pssh_box(&e.key, e.scheme));
-            }
-        }
+    if mux.mvex_before_trak {
+        write_mvex(w, track);
+        write_trak(w, track, enc);
+        write_pssh(w, enc);
+    } else {
+        write_trak(w, track, enc);
+        write_pssh(w, enc);
+        write_mvex(w, track);
     }
-
-    // mvex > trex
-    w.begin(fcc(b"mvex"));
-    w.begin(fcc(b"trex"));
-    full(w, 0, 0);
-    w.u32(track.track_id);
-    w.u32(1); // default_sample_description_index
-    w.u32(0); // default_sample_duration
-    w.u32(0); // default_sample_size
-    w.u32(0); // default_sample_flags
-    w.end();
-    w.end();
 
     w.end(); // moov
 }
@@ -220,7 +264,7 @@ fn write_trak(w: &mut BoxWriter, track: &Track, enc: Option<&Encryption>) {
     w.u32(0); // modification
     w.u32(track.info.timescale.0);
     w.u32(0); // duration
-    w.u16(0x55c4); // language 'und'
+    w.u16(mdhd_language(track.info.language.as_deref()));
     w.u16(0); // pre_defined
     w.end();
 

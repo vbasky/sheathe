@@ -62,6 +62,14 @@ pub struct Representation {
     pub addressing: SegmentAddressing,
     /// When set, this is a trick-play representation (`maxPlayoutRate`).
     pub max_playout_rate: Option<f64>,
+    /// ISO-639 language (`AdaptationSet`/`Representation` `@lang`).
+    pub language: Option<String>,
+    /// DASH Role values (`main`, `subtitle`, `forced-subtitle`, …).
+    pub roles: Vec<String>,
+    /// DASH Accessibility descriptors as `(schemeIdUri, value)`.
+    pub accessibilities: Vec<(String, String)>,
+    /// Dolby Vision supplemental codecs string, if any.
+    pub supplemental_codecs: Option<String>,
 }
 
 impl Representation {
@@ -87,6 +95,10 @@ impl Representation {
                 availability_time_offset: None,
             },
             max_playout_rate: None,
+            language: None,
+            roles: Vec::new(),
+            accessibilities: Vec::new(),
+            supplemental_codecs: None,
         }
     }
 
@@ -105,6 +117,10 @@ impl Representation {
             segment_durations,
             addressing: SegmentAddressing::Base(base),
             max_playout_rate: None,
+            language: None,
+            roles: Vec::new(),
+            accessibilities: Vec::new(),
+            supplemental_codecs: None,
         }
     }
 
@@ -283,6 +299,10 @@ pub struct Manifest {
     pub periods: Vec<Period>,
     /// When set, emit `ContentProtection` elements (encrypted content).
     pub protection: Option<Protection>,
+    /// Emit DASH-IF last-segment-number SupplementalProperty when useful.
+    pub add_last_segment_number: bool,
+    /// Emit `SegmentTemplate@duration` when all but the last segment share a duration.
+    pub segment_template_constant_duration: bool,
 }
 
 impl Default for Manifest {
@@ -299,6 +319,8 @@ impl Default for Manifest {
             utc_timing: None,
             periods: Vec::new(),
             protection: None,
+            add_last_segment_number: false,
+            segment_template_constant_duration: false,
         }
     }
 }
@@ -399,7 +421,13 @@ impl Manifest {
         }
 
         for period in &self.periods {
-            render_period(&mut s, period, self.protection.as_ref());
+            render_period(
+                &mut s,
+                period,
+                self.protection.as_ref(),
+                self.add_last_segment_number,
+                self.segment_template_constant_duration,
+            );
         }
 
         s.push_str("</MPD>\n");
@@ -407,7 +435,13 @@ impl Manifest {
     }
 }
 
-fn render_period(s: &mut String, period: &Period, protection: Option<&Protection>) {
+fn render_period(
+    s: &mut String,
+    period: &Period,
+    protection: Option<&Protection>,
+    last_seg: bool,
+    const_dur: bool,
+) {
     let _ = write!(s, "  <Period id=\"{}\"", xml_escape(&period.id));
     if let Some(start) = period.start_seconds {
         let _ = write!(s, " start=\"{}\"", iso8601_duration(start));
@@ -432,7 +466,7 @@ fn render_period(s: &mut String, period: &Period, protection: Option<&Protection
             .filter(|r| r.stream.kind == kind && r.max_playout_rate.is_none())
             .collect();
         if !normal.is_empty() {
-            render_adaptation_set(s, content_type, &normal, protection, false);
+            render_adaptation_set(s, content_type, &normal, protection, false, last_seg, const_dur);
         }
 
         if kind == MediaKind::Video {
@@ -442,7 +476,7 @@ fn render_period(s: &mut String, period: &Period, protection: Option<&Protection
                 .filter(|r| r.stream.kind == MediaKind::Video && r.max_playout_rate.is_some())
                 .collect();
             if !trick.is_empty() {
-                render_adaptation_set(s, "video", &trick, protection, true);
+                render_adaptation_set(s, "video", &trick, protection, true, last_seg, const_dur);
             }
         }
     }
@@ -456,12 +490,34 @@ fn render_adaptation_set(
     reps: &[&Representation],
     protection: Option<&Protection>,
     trick_play: bool,
+    last_seg: bool,
+    const_dur: bool,
 ) {
-    let _ = writeln!(
-        s,
-        "    <AdaptationSet contentType=\"{}\" segmentAlignment=\"true\">",
-        content_type
-    );
+    let lang = reps.iter().find_map(|r| r.language.as_ref().or(r.stream.language.as_ref()));
+    let _ =
+        write!(s, "    <AdaptationSet contentType=\"{}\" segmentAlignment=\"true\"", content_type);
+    if let Some(lang) = lang {
+        let _ = write!(s, " lang=\"{}\"", xml_escape(lang));
+    }
+    s.push_str(">\n");
+    // Role / Accessibility are AdaptationSet-level; take the first rep's lists.
+    if let Some(first) = reps.first() {
+        for (scheme, value) in &first.accessibilities {
+            let _ = writeln!(
+                s,
+                "      <Accessibility schemeIdUri=\"{}\" value=\"{}\"/>",
+                xml_escape(scheme),
+                xml_escape(value)
+            );
+        }
+        for role in &first.roles {
+            let _ = writeln!(
+                s,
+                "      <Role schemeIdUri=\"urn:mpeg:dash:role:2011\" value=\"{}\"/>",
+                xml_escape(role)
+            );
+        }
+    }
     if trick_play {
         // DASH-IF IOP: trick-mode AdaptationSet is marked with EssentialProperty
         // referencing the main content AdaptationSet id. We use value="1" as a
@@ -474,7 +530,7 @@ fn render_adaptation_set(
         render_content_protection(s, p);
     }
     for r in reps {
-        render_representation(s, r);
+        render_representation(s, r, last_seg, const_dur);
     }
     s.push_str("    </AdaptationSet>\n");
 }
@@ -526,7 +582,7 @@ fn kid_uuid(kid: &[u8; 16]) -> String {
     format!("{}-{}-{}-{}-{}", &h[0..8], &h[8..12], &h[12..16], &h[16..20], &h[20..32])
 }
 
-fn render_representation(s: &mut String, r: &Representation) {
+fn render_representation(s: &mut String, r: &Representation, last_seg: bool, const_dur: bool) {
     let codec = r.stream.rfc6381();
     let bandwidth = r.stream.bitrate.unwrap_or(0);
     let _ = write!(s, "      <Representation id=\"{}\" codecs=\"{}\"", r.id, codec);
@@ -539,7 +595,17 @@ fn render_representation(s: &mut String, r: &Representation) {
     if let Some(mpr) = r.max_playout_rate {
         let _ = write!(s, " maxPlayoutRate=\"{mpr}\"");
     }
+    if let Some(sc) = &r.supplemental_codecs {
+        let _ = write!(s, " scte214:supplementalCodecs=\"{}\"", xml_escape(sc));
+    }
     let _ = writeln!(s, " bandwidth=\"{}\">", bandwidth);
+    if last_seg && !r.segment_durations.is_empty() {
+        let n = r.segment_durations.len();
+        let _ = writeln!(
+            s,
+            "        <SupplementalProperty schemeIdUri=\"http://dashif.org/guidelines/last-segment-number\" value=\"{n}\"/>"
+        );
+    }
 
     match &r.addressing {
         SegmentAddressing::Template {
@@ -562,6 +628,13 @@ fn render_representation(s: &mut String, r: &Representation) {
                     s,
                     " availabilityTimeOffset=\"{ato}\" availabilityTimeComplete=\"false\""
                 );
+            }
+            if const_dur {
+                if let Some(&d) = r.segment_durations.first() {
+                    if r.segment_durations.iter().rev().skip(1).all(|&x| x == d) {
+                        let _ = write!(s, " duration=\"{d}\"");
+                    }
+                }
             }
             s.push_str(">\n");
             s.push_str("          <SegmentTimeline>\n");
@@ -664,6 +737,7 @@ mod tests {
             sample_rate: None,
             bitrate: Some(2_500_000),
             codec_string: Some("avc1.64001f".into()),
+            language: None,
         }
     }
 
@@ -676,6 +750,7 @@ mod tests {
             sample_rate: Some(48000),
             bitrate: Some(128_000),
             codec_string: Some("mp4a.40.2".into()),
+            language: None,
         }
     }
 

@@ -101,6 +101,9 @@ fn encrypted_segment_has_cenc_boxes_and_aux_offset() {
         constant_iv: [0; 16],
         systems: vec![ProtectionSystem::Common],
         crypto_period_seconds: None,
+        crypt_byte_block: 1,
+        skip_byte_block: 9,
+        playready_extra: None,
     };
 
     // Init switches the sample entry to encv and carries tenc + pssh.
@@ -141,6 +144,9 @@ fn key_rotation_emits_seig_groups_and_zero_tenc_kid() {
         constant_iv: [0; 16],
         systems: vec![ProtectionSystem::Widevine],
         crypto_period_seconds: Some(0.0001), // tiny period so rotation is active
+        crypt_byte_block: 1,
+        skip_byte_block: 9,
+        playready_extra: None,
     };
 
     // Rotation moves the pssh out of the init; the tenc default KID is zeroed.

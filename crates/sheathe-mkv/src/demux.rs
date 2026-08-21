@@ -442,6 +442,7 @@ fn build_stream(def: &TrackDef, _samples: &[Sample]) -> Option<(Vec<u8>, StreamI
         sample_rate: if def.kind == MediaKind::Audio { Some(def.sample_rate) } else { None },
         bitrate: None,
         codec_string,
+        language: None,
     };
     Some((sample_entry, info))
 }

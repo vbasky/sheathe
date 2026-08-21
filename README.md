@@ -16,13 +16,13 @@ built and validated against it as the reference oracle.
 
 📖 **Read the story:** [Packaging the World's Video in Pure Rust](https://medium.com/@vbasky/packaging-the-worlds-video-in-pure-rust-ff1f6b884fec)
 
-> Status: **Phases 0–5 complete** — VOD + live/advanced manifests + on-demand
-> single-file DASH, CMAF/TS/packed-audio segments, encryption, broad inputs, HTTP
-> push, UDP ingest, and a JIT origin. `probe` / `package` / `origin` demux MP4,
-> MPEG-TS, WebM/Matroska, and elementary streams; write DASH/HLS with correct
-> codec strings. Video: H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3, E-AC-3,
-> MP3, FLAC, Opus. Text: WebVTT + CEA-608/708. CENC matrix + multi-DRM `pssh`.
-> See [`ROADMAP.md`](./ROADMAP.md) and [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
+> Status: **Phases 0–5 complete**, plus Shaka-parity stream descriptors, HLS/DASH
+> knobs, DRM (CPIX/SPEKE, Widevine key server, HLS AES-128), HTTPS push, and a
+> TLS origin. `probe` / `package` / `origin` demux MP4, MPEG-TS, WebM/Matroska,
+> and elementary streams; write DASH/HLS with correct codec strings. Video:
+> H.264, H.265, AV1, VP8/VP9. Audio: AAC, AC-3, E-AC-3, MP3, FLAC, Opus. Text:
+> WebVTT + CEA-608/708. CENC matrix + multi-DRM `pssh`. See
+> [`ROADMAP.md`](./ROADMAP.md) and [`docs/CONFORMANCE.md`](./docs/CONFORMANCE.md).
 
 ## Why
 
@@ -60,8 +60,8 @@ cargo run -p sheathe-cli -- --help
 | Command | Description |
 |---------|-------------|
 | `sheathe package` | Demux → fragment → CMAF/TS/packed-audio segments + DASH/HLS |
-| `sheathe probe` | List streams sheathe detects (no packaging) |
-| `sheathe origin` | JIT HTTP origin — package on `GET /package?input=…` |
+| `sheathe probe` | Dump stream info (Shaka `--dump_stream_info`) without packaging |
+| `sheathe origin` | JIT HTTP(S) origin — package on `GET /package?input=…` |
 
 **Full flag reference, recipes, and output layouts:**
 [**docs/CLI.md**](./docs/CLI.md)
@@ -100,20 +100,56 @@ sheathe package in.mp4 -o advanced/ --dash --hls \
   --trick-play --low-latency --part-duration 0.5 \
   --scte35 30:out:15 --scte35 45:in
 
-# JIT origin (package on request)
+# Stream descriptors (Shaka `in=file,stream=audio,…`; a bare path still means every track)
+sheathe package \
+  in=movie.mp4,stream=audio,language=eng,hls_name=English,drm_label=AUDIO \
+  in=movie.mp4,stream=video,bandwidth=4500000 \
+  -o site/ --dash --hls
+
+# HLS AES-128 (TS / packed-audio) and CENC pattern blocks
+sheathe package in.mp4 -o ts/ --hls --format ts --enc-scheme aes128 --enc-key-file keys.txt
+sheathe package in.mp4 -o drm/ --dash --hls --enc-key-file keys.txt \
+  --enc-scheme cbcs --crypt-byte-block 1 --skip-byte-block 9 \
+  --playready-extra-header-data '<CUSTOM>…</CUSTOM>'
+
+# CPIX / SPEKE and Widevine key server
+sheathe package in.mp4 -o cpix/ --dash --hls --cpix keys.cpix
+sheathe package in.mp4 -o wv/ --dash --hls \
+  --enable-widevine-encryption --key-server-url https://license.example/cenc \
+  --content-id 74657374 --signer my-signer \
+  --aes-signing-key 11… --aes-signing-iv 22…
+
+# Decrypt CENC input, then re-package
+sheathe package enc.mp4 -o clear/ --dash --hls --decrypt --enc-key-file keys.txt
+
+# HTTPS push + live rewrite
+sheathe package in.mp4 -o out/ --dash --hls \
+  --http-push https://ingest.example/live --user-agent sheathe \
+  --presentation live --live-window 3 --live-rewrite
+
+# JIT origin (HTTP, or HTTPS + Basic auth)
 sheathe origin --bind 127.0.0.1:8787 --media-root .
+sheathe origin --bind 127.0.0.1:8443 --tls-cert cert.pem --tls-key key.pem --auth user:pass
 # curl 'http://127.0.0.1:8787/package?input=clip.mp4&format=hls'
 ```
+
+`-h` is a compact flag list; `--help` is Shaka-style long descriptions plus a
+`packager` flag map.
 
 ### `package` flag groups (summary)
 
 | Group | Flags |
 |-------|--------|
+| Arguments | positional paths **or** Shaka `in=…,stream=…` descriptors |
 | Core | `-o/--out`, `--segment-duration`, `--dash`, `--hls` |
 | Format | `--format cmaf\|ts\|packed-audio`, `--on-demand`, `--parallel`, `--http-push` |
 | Presentation | `--presentation vod\|event\|live`, `--live-window`, `--multi-period` |
 | Advanced | `--trick-play`, `--low-latency`, `--part-duration`, `--scte35`, `--availability-start-time` |
-| Encryption | `--enc-key`, `--enc-key-file`, `--enc-scheme`, `--enc-key-uri`, `--protection-systems`, `--crypto-period-duration` |
+| HLS/DASH | `--hls-base-url`, `--hls-media-sequence-number`, `--hls-start-time-offset`, `--create-session-keys`, `--add-program-date-time`, `--closed-captions`, `--use-legacy-vp9-codec-string`, `--dash-add-last-segment-number`, `--segment-template-constant-duration`, `--use-dovi-supplemental-codecs`, `--mvex-before-trak` |
+| Encryption | `--enc-key`, `--enc-key-file`, `--enc-scheme` (`cenc`/`cens`/`cbc1`/`cbcs`/`aes128`), `--enc-key-uri`, `--protection-systems`, `--crypto-period-duration`, `--crypt-byte-block`, `--skip-byte-block`, `--playready-extra-header-data`, `--keys`, `--decrypt`, `--cpix`, `--enable-widevine-encryption`, `--key-server-url` |
+| Live / IO | `--live-rewrite`, `--ignore-http-output-failures`, `--user-agent`, `--ca-file`, `--client-cert-file`, `--disable-peer-verification` |
+
+`sheathe origin` also takes `--tls-cert`, `--tls-key`, and `--auth user:pass`.
 
 See [docs/CLI.md](./docs/CLI.md) for defaults, output directory layout, and
 every recipe (ABR, multi-period, DRM, LL-HLS, origin, push, oracle).

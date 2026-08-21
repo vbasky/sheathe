@@ -18,6 +18,35 @@ pub struct Variant {
     pub playlist_uri: String,
     /// Optional I-frame (trick-play) playlist URI for video variants.
     pub iframe_playlist_uri: Option<String>,
+    /// `#EXT-X-MEDIA` NAME (audio/text). Defaults to `audio{i}` / `text{i}`.
+    pub name: Option<String>,
+    /// `#EXT-X-MEDIA` GROUP-ID. Defaults to `aud` for audio.
+    pub group_id: Option<String>,
+    /// `#EXT-X-MEDIA` LANGUAGE override (else [`StreamInfo::language`]).
+    pub language: Option<String>,
+    /// `#EXT-X-MEDIA` CHARACTERISTICS (colon-separated in the tag).
+    pub characteristics: Vec<String>,
+    /// Forced narrative subtitle (`FORCED=YES`).
+    pub forced: bool,
+    /// Bandwidth override in bits/sec (else [`StreamInfo::bitrate`]).
+    pub bandwidth: Option<u32>,
+}
+
+impl Variant {
+    /// Minimal video/audio variant (historical constructor).
+    pub fn new(stream: StreamInfo, playlist_uri: impl Into<String>) -> Self {
+        Self {
+            stream,
+            playlist_uri: playlist_uri.into(),
+            iframe_playlist_uri: None,
+            name: None,
+            group_id: None,
+            language: None,
+            characteristics: Vec::new(),
+            forced: false,
+            bandwidth: None,
+        }
+    }
 }
 
 /// HLS playlist type (`#EXT-X-PLAYLIST-TYPE`).
@@ -69,12 +98,14 @@ const AUDIO_GROUP: &str = "aud";
 /// CENC key signalling for an HLS media playlist (`#EXT-X-KEY`).
 #[derive(Debug, Clone)]
 pub struct KeyInfo {
-    /// `SAMPLE-AES` (cbcs) or `SAMPLE-AES-CTR` (cenc).
+    /// `SAMPLE-AES` (cbcs), `SAMPLE-AES-CTR` (cenc), or `AES-128`.
     pub method: String,
-    /// `KEYFORMAT` value, e.g. `urn:mpeg:dash:mp4protection:2011`.
+    /// `KEYFORMAT` value, e.g. `urn:mpeg:dash:mp4protection:2011` or `identity`.
     pub key_format: String,
     /// Key-delivery URI.
     pub uri: String,
+    /// Optional `IV=` hex (with or without `0x`). Omitted → media sequence IV.
+    pub iv: Option<String>,
 }
 
 /// An `#EXT-X-DATERANGE` marker (SCTE-35 ad cues, interstitials, …).
@@ -171,6 +202,10 @@ pub struct MediaPlaylist {
     pub preload_hint: Option<(String, String)>,
     /// Emit `#EXT-X-ENDLIST` (VOD always; EVENT when finalised).
     pub endlist: bool,
+    /// `#EXT-X-START:TIME-OFFSET=` (seconds; negative = from end).
+    pub start_time_offset: Option<f64>,
+    /// Prefix prepended to every segment / MAP / part URI (`--hls_base_url`).
+    pub base_url: String,
 }
 
 impl Default for MediaPlaylist {
@@ -188,6 +223,8 @@ impl Default for MediaPlaylist {
             can_block_reload: false,
             preload_hint: None,
             endlist: true,
+            start_time_offset: None,
+            base_url: String::new(),
         }
     }
 }
@@ -278,16 +315,25 @@ impl MediaPlaylist {
             let _ = writeln!(s, "#EXT-X-PART-INF:PART-TARGET={pt:.3}");
         }
 
+        if let Some(off) = self.start_time_offset {
+            let _ = writeln!(s, "#EXT-X-START:TIME-OFFSET={off}");
+        }
+
         if let Some(k) = &self.key {
-            let _ = writeln!(
+            let _ = write!(
                 s,
                 "#EXT-X-KEY:METHOD={},URI=\"{}\",KEYFORMAT=\"{}\",KEYFORMATVERSIONS=\"1\"",
                 k.method, k.uri, k.key_format
             );
+            if let Some(iv) = &k.iv {
+                let _ = write!(s, ",IV={iv}");
+            }
+            s.push('\n');
         }
 
         if let Some(init) = &self.init_uri {
-            let _ = writeln!(s, "#EXT-X-MAP:URI=\"{init}\"");
+            let uri = prefix_uri(&self.base_url, init);
+            let _ = writeln!(s, "#EXT-X-MAP:URI=\"{uri}\"");
         }
 
         for dr in &self.dateranges {
@@ -299,16 +345,19 @@ impl MediaPlaylist {
                 let _ = writeln!(s, "#EXT-X-PROGRAM-DATE-TIME:{pdt}");
             }
             for part in &seg.parts {
-                let _ = write!(s, "#EXT-X-PART:DURATION={:.3},URI=\"{}\"", part.duration, part.uri);
+                let uri = prefix_uri(&self.base_url, &part.uri);
+                let _ = write!(s, "#EXT-X-PART:DURATION={:.3},URI=\"{uri}\"", part.duration);
                 if part.independent {
                     s.push_str(",INDEPENDENT=YES");
                 }
                 s.push('\n');
             }
-            let _ = writeln!(s, "#EXTINF:{:.3},\n{}", seg.duration, seg.uri);
+            let uri = prefix_uri(&self.base_url, &seg.uri);
+            let _ = writeln!(s, "#EXTINF:{:.3},\n{uri}", seg.duration);
         }
 
         if let Some((ty, uri)) = &self.preload_hint {
+            let uri = prefix_uri(&self.base_url, uri);
             let _ = writeln!(s, "#EXT-X-PRELOAD-HINT:TYPE={ty},URI=\"{uri}\"");
         }
 
@@ -362,6 +411,35 @@ fn render_daterange(s: &mut String, dr: &DateRange) {
     s.push('\n');
 }
 
+/// Closed-caption channel signalled as `#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS`
+/// (Shaka `--closed_captions`).
+#[derive(Debug, Clone)]
+pub struct ClosedCaption {
+    /// `INSTREAM-ID`: `CC1`..`CC4` or `SERVICE1`..`SERVICE63`.
+    pub instream_id: String,
+    /// NAME attribute.
+    pub name: String,
+    /// LANGUAGE attribute.
+    pub language: Option<String>,
+    /// DEFAULT=YES.
+    pub default: bool,
+    /// AUTOSELECT=YES.
+    pub autoselect: bool,
+}
+
+/// Options for [`master_playlist_with`].
+#[derive(Debug, Clone, Default)]
+pub struct MasterOptions {
+    /// `#EXT-X-SESSION-KEY` copies of every media-playlist key (offline HLS).
+    pub session_keys: Vec<KeyInfo>,
+    /// Closed-caption renditions (`GROUP-ID="cc"`).
+    pub closed_captions: Vec<ClosedCaption>,
+    /// `#EXT-X-START:TIME-OFFSET=` on the master (optional).
+    pub start_time_offset: Option<f64>,
+    /// Prefix for media playlist URIs.
+    pub base_url: String,
+}
+
 /// Build a master playlist over `variants`.
 ///
 /// Audio variants are emitted as an `#EXT-X-MEDIA` rendition group; video
@@ -372,70 +450,174 @@ fn render_daterange(s: &mut String, dr: &DateRange) {
 /// Video variants with [`Variant::iframe_playlist_uri`] also emit
 /// `#EXT-X-I-FRAME-STREAM-INF` for trick-play.
 pub fn master_playlist(variants: &[Variant]) -> String {
+    master_playlist_with(variants, &MasterOptions::default())
+}
+
+/// [`master_playlist`] with session keys, closed captions, and start offset.
+pub fn master_playlist_with(variants: &[Variant], opts: &MasterOptions) -> String {
     let audio: Vec<&Variant> =
         variants.iter().filter(|v| v.stream.kind == MediaKind::Audio).collect();
     let video: Vec<&Variant> =
         variants.iter().filter(|v| v.stream.kind == MediaKind::Video).collect();
+    let text: Vec<&Variant> =
+        variants.iter().filter(|v| v.stream.kind == MediaKind::Text).collect();
 
     let mut s = String::from("#EXTM3U\n#EXT-X-VERSION:7\n");
+    if let Some(off) = opts.start_time_offset {
+        let _ = writeln!(s, "#EXT-X-START:TIME-OFFSET={off}");
+    }
+    for k in &opts.session_keys {
+        let _ = write!(
+            s,
+            "#EXT-X-SESSION-KEY:METHOD={},URI=\"{}\",KEYFORMAT=\"{}\",KEYFORMATVERSIONS=\"1\"",
+            k.method, k.uri, k.key_format
+        );
+        if let Some(iv) = &k.iv {
+            let _ = write!(s, ",IV={iv}");
+        }
+        s.push('\n');
+    }
 
     for (i, a) in audio.iter().enumerate() {
         let default = if i == 0 { "YES" } else { "NO" };
-        let _ = writeln!(
+        let group = a.group_id.as_deref().unwrap_or(AUDIO_GROUP);
+        let name = a.name.clone().unwrap_or_else(|| format!("audio{i}"));
+        let uri = prefix_uri(&opts.base_url, &a.playlist_uri);
+        let _ = write!(
             s,
-            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"{AUDIO_GROUP}\",NAME=\"audio{i}\",\
-             DEFAULT={default},AUTOSELECT=YES,URI=\"{}\"",
-            a.playlist_uri
+            "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"{group}\",NAME=\"{name}\",\
+             DEFAULT={default},AUTOSELECT=YES,URI=\"{uri}\""
         );
+        render_media_extras(&mut s, a);
+        s.push('\n');
+    }
+    for (i, t) in text.iter().enumerate() {
+        let default = if i == 0 { "YES" } else { "NO" };
+        let group = t.group_id.as_deref().unwrap_or("sub");
+        let name = t.name.clone().unwrap_or_else(|| format!("text{i}"));
+        let uri = prefix_uri(&opts.base_url, &t.playlist_uri);
+        let forced = if t.forced { "YES" } else { "NO" };
+        let _ = write!(
+            s,
+            "#EXT-X-MEDIA:TYPE=SUBTITLES,GROUP-ID=\"{group}\",NAME=\"{name}\",\
+             DEFAULT={default},AUTOSELECT=YES,FORCED={forced},URI=\"{uri}\""
+        );
+        render_media_extras(&mut s, t);
+        s.push('\n');
+    }
+    if !opts.closed_captions.is_empty() {
+        for cc in &opts.closed_captions {
+            let default = if cc.default { "YES" } else { "NO" };
+            let auto = if cc.autoselect { "YES" } else { "NO" };
+            let _ = write!(
+                s,
+                "#EXT-X-MEDIA:TYPE=CLOSED-CAPTIONS,GROUP-ID=\"cc\",NAME=\"{}\",\
+                 DEFAULT={default},AUTOSELECT={auto},INSTREAM-ID=\"{}\"",
+                cc.name, cc.instream_id
+            );
+            if let Some(lang) = &cc.language {
+                let _ = write!(s, ",LANGUAGE=\"{lang}\"");
+            }
+            s.push('\n');
+        }
     }
 
     let has_audio = !audio.is_empty();
     let audio_extra = audio.first();
+    let cc_group = if opts.closed_captions.is_empty() { None } else { Some("cc") };
+    let sub_group = text.first().and_then(|t| t.group_id.as_deref()).or(if text.is_empty() {
+        None
+    } else {
+        Some("sub")
+    });
 
     if video.is_empty() {
         for a in &audio {
-            stream_inf(&mut s, a, None);
+            stream_inf(&mut s, a, None, None, None, &opts.base_url);
         }
     } else {
         for v in &video {
-            stream_inf(&mut s, v, if has_audio { audio_extra.copied() } else { None });
+            stream_inf(
+                &mut s,
+                v,
+                if has_audio { audio_extra.copied() } else { None },
+                cc_group,
+                sub_group,
+                &opts.base_url,
+            );
         }
         for v in &video {
             if let Some(iframe) = &v.iframe_playlist_uri {
-                iframe_stream_inf(&mut s, v, iframe);
+                iframe_stream_inf(&mut s, v, iframe, &opts.base_url);
             }
         }
     }
     s
 }
 
+fn render_media_extras(s: &mut String, v: &Variant) {
+    let lang = v.language.as_ref().or(v.stream.language.as_ref());
+    if let Some(lang) = lang {
+        let _ = write!(s, ",LANGUAGE=\"{lang}\"");
+    }
+    if !v.characteristics.is_empty() {
+        let _ = write!(s, ",CHARACTERISTICS=\"{}\"", v.characteristics.join(","));
+    }
+}
+
+fn prefix_uri(base: &str, uri: &str) -> String {
+    if base.is_empty() || uri.contains("://") {
+        uri.to_string()
+    } else if base.ends_with('/') {
+        format!("{base}{uri}")
+    } else {
+        format!("{base}/{uri}")
+    }
+}
+
 /// Write one `#EXT-X-STREAM-INF` + its URI, optionally bound to an audio group.
-fn stream_inf(s: &mut String, v: &Variant, audio: Option<&Variant>) {
+fn stream_inf(
+    s: &mut String,
+    v: &Variant,
+    audio: Option<&Variant>,
+    cc_group: Option<&str>,
+    sub_group: Option<&str>,
+    base_url: &str,
+) {
     let mut codecs = v.stream.rfc6381();
-    let mut bandwidth = v.stream.bitrate.unwrap_or(0);
+    let mut bandwidth = v.bandwidth.or(v.stream.bitrate).unwrap_or(0);
     if let Some(a) = audio {
         codecs = format!("{codecs},{}", a.stream.rfc6381());
-        bandwidth += a.stream.bitrate.unwrap_or(0);
+        bandwidth += a.bandwidth.or(a.stream.bitrate).unwrap_or(0);
     }
 
     let _ = write!(s, "#EXT-X-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\"");
     if let Some((w, h)) = v.stream.resolution {
         let _ = write!(s, ",RESOLUTION={w}x{h}");
     }
-    if audio.is_some() {
-        let _ = write!(s, ",AUDIO=\"{AUDIO_GROUP}\"");
+    if let Some(a) = audio {
+        let group = a.group_id.as_deref().unwrap_or(AUDIO_GROUP);
+        let _ = write!(s, ",AUDIO=\"{group}\"");
     }
-    let _ = writeln!(s, "\n{}", v.playlist_uri);
+    if let Some(g) = cc_group {
+        let _ = write!(s, ",CLOSED-CAPTIONS=\"{g}\"");
+    }
+    if let Some(g) = sub_group {
+        let _ = write!(s, ",SUBTITLES=\"{g}\"");
+    }
+    let uri = prefix_uri(base_url, &v.playlist_uri);
+    let _ = writeln!(s, "\n{uri}");
 }
 
 /// Write one `#EXT-X-I-FRAME-STREAM-INF` for trick-play.
-fn iframe_stream_inf(s: &mut String, v: &Variant, iframe_uri: &str) {
+fn iframe_stream_inf(s: &mut String, v: &Variant, iframe_uri: &str, base_url: &str) {
     let codecs = v.stream.rfc6381();
     // I-frame playlists are typically a fraction of the full bitrate.
-    let bandwidth = v.stream.bitrate.unwrap_or(0) / 10;
+    let bandwidth = v.bandwidth.or(v.stream.bitrate).unwrap_or(0) / 10;
+    let uri = prefix_uri(base_url, iframe_uri);
     let _ = write!(
         s,
-        "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\",URI=\"{iframe_uri}\""
+        "#EXT-X-I-FRAME-STREAM-INF:BANDWIDTH={bandwidth},CODECS=\"{codecs}\",URI=\"{uri}\""
     );
     if let Some((w, h)) = v.stream.resolution {
         let _ = write!(s, ",RESOLUTION={w}x{h}");
@@ -463,11 +645,15 @@ pub fn packed_audio_playlist(segments: &[SegmentRef], key: Option<&KeyInfo>) -> 
     let _ = writeln!(s, "#EXT-X-TARGETDURATION:{target}");
     s.push_str("#EXT-X-MEDIA-SEQUENCE:0\n");
     if let Some(k) = key {
-        let _ = writeln!(
+        let _ = write!(
             s,
             "#EXT-X-KEY:METHOD={},URI=\"{}\",KEYFORMAT=\"{}\",KEYFORMATVERSIONS=\"1\"",
             k.method, k.uri, k.key_format
         );
+        if let Some(iv) = &k.iv {
+            let _ = write!(s, ",IV={iv}");
+        }
+        s.push('\n');
     }
     for seg in segments {
         let _ = writeln!(s, "#EXTINF:{:.3},\n{}", seg.duration, seg.uri);
@@ -514,6 +700,7 @@ mod tests {
             sample_rate: None,
             bitrate: Some(2_500_000),
             codec_string: Some("avc1.64001f".into()),
+            language: None,
         }
     }
 
@@ -526,6 +713,7 @@ mod tests {
             sample_rate: Some(48000),
             bitrate: Some(128_000),
             codec_string: Some("mp4a.40.2".into()),
+            language: None,
         }
     }
 
@@ -605,18 +793,9 @@ mod tests {
         assert!(iframe.contains("#EXT-X-I-FRAMES-ONLY"));
         assert!(iframe.contains("#EXT-X-ENDLIST"));
 
-        let variants = vec![
-            Variant {
-                stream: video(),
-                playlist_uri: "media_0.m3u8".into(),
-                iframe_playlist_uri: Some("iframe_0.m3u8".into()),
-            },
-            Variant {
-                stream: audio(),
-                playlist_uri: "media_1.m3u8".into(),
-                iframe_playlist_uri: None,
-            },
-        ];
+        let mut v = Variant::new(video(), "media_0.m3u8");
+        v.iframe_playlist_uri = Some("iframe_0.m3u8".into());
+        let variants = vec![v, Variant::new(audio(), "media_1.m3u8")];
         let master = master_playlist(&variants);
         assert!(master.contains("#EXT-X-STREAM-INF:"));
         assert!(master.contains("#EXT-X-I-FRAME-STREAM-INF:"));
