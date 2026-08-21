@@ -20,6 +20,8 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # webpki-roots (rustls TLS roots)
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.8
 
