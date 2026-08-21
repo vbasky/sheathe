@@ -8,8 +8,8 @@
 //! - **`origin`** — JIT HTTP origin (`GET /package?input=…`)
 //!
 //! The packaging pipeline itself lives in the reusable [`sheathe_package`] crate;
-//! this module is a thin CLI over it. Both the `sheathe-cli` and `sheathe` binaries
-//! are thin wrappers over [`run`].
+//! this module is a thin CLI over it. `cargo install sheathe-cli` installs the
+//! `sheathe` binary, which is a thin wrapper over [`run`].
 //!
 //! Full end-user command documentation: the repository's `docs/CLI.md`.
 

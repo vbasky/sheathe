@@ -5,7 +5,7 @@ format, and typical workflow. For design status see [ROADMAP.md](../ROADMAP.md);
 for oracle / conformance gates see [CONFORMANCE.md](./CONFORMANCE.md).
 
 ```sh
-cargo install sheathe          # crates.io
+cargo install sheathe-cli      # crates.io; installs the `sheathe` binary
 sheathe --help
 sheathe <COMMAND> --help
 ```
@@ -433,7 +433,7 @@ just bench                              # default corpus bear, 5 runs
 
 | Task | Command |
 |------|---------|
-| Build release | `cargo build -p sheathe --release` |
+| Build release | `cargo build -p sheathe-cli --release` |
 | Full CI gate | `just check-all` |
 | Unit tests | `just test` |
 | Clippy | `just lint` |
@@ -447,10 +447,12 @@ just bench                              # default corpus bear, 5 runs
 
 ## Library API (related)
 
-The CLI is a thin wrapper over crates:
+The CLI is a thin wrapper over crates. Library users can `cargo add sheathe`
+(the facade) or depend on a specific `sheathe-*` crate:
 
 | Crate | Role |
 |-------|------|
+| `sheathe` | Facade: re-exports the pipeline and format crates |
 | `sheathe-package` | `package()`, `probe()`, `serve_origin()`, IO sinks |
 | `sheathe-dash` | MPD generation |
 | `sheathe-hls` | Master / media playlists |
@@ -459,7 +461,7 @@ The CLI is a thin wrapper over crates:
 | `sheathe-crypto` | CENC schemes + `pssh` |
 
 ```rust
-use sheathe_package::{PackageOptions, package};
+use sheathe::{PackageOptions, package};
 use std::path::PathBuf;
 
 let opts = PackageOptions {

@@ -44,8 +44,8 @@ Foundation   sheathe-core      Media model: streams, samples, timing, errors
 Pipeline     sheathe-dash       DASH MPD generation
              sheathe-hls        HLS master + media playlist generation
 
-Application  sheathe-cli        The `sheathe` binary
-             sheathe            CLI crate (thin wrapper over sheathe-cli)
+Application  sheathe            Facade crate (`cargo add sheathe`)
+             sheathe-cli        The `sheathe` binary (`cargo install sheathe-cli`)
 ```
 
 The dependency graph points strictly down. A manifest crate composes foundation crates but never reaches sideways into another manifest crate. This is where Rust's crate boundary earns its keep: the MP4 writer cannot accidentally call into the DASH MPD generator, because the compiler won't let it. Nine shallow crates, each small enough to hold in your head and test in isolation.
@@ -153,7 +153,7 @@ fn avc_string(fourcc: &[u8; 4], avcc: &[u8]) -> Option<String> {
 
 ## The Oracle: Differential Testing Against Shaka Packager
 
-sheathe adopts the "revelo method": implement in pure Rust, then differential-test against a reference oracle. For a packager, the oracle is Shaka Packager running the same input file through the same output configuration.
+sheathe implements in pure Rust, then differential-tests against a reference oracle. For a packager, the oracle is Shaka Packager running the same input file through the same output configuration.
 
 The oracle harness (`just oracle input.mp4`) runs both packagers on the same source, then diffs:
 
@@ -161,7 +161,7 @@ The oracle harness (`just oracle input.mp4`) runs both packagers on the same sou
 2. **Canonical MPD.** XML canonicalization (`xmllint --c14n`) strips formatting to compare structure — same representations, same timelines, same codec strings.
 3. **ffmpeg decode.** Both outputs are fed through `ffmpeg -f framemd5` to confirm the video renders identically.
 
-This is the same methodology that keeps revelo's 180+ parsers byte-identical to MediaInfoLib and viser's convex hulls correct to the numerical method. Nothing ships until its bytes are verified against the oracle. If Shaka and sheathe disagree, the bug is in sheathe until proven otherwise.
+Nothing ships until its bytes are verified against the oracle. If Shaka and sheathe disagree, the bug is in sheathe until proven otherwise.
 
 ---
 
@@ -197,7 +197,7 @@ sheathe package input.mp4 --out site/ --dash --hls \
 sheathe probe input.ts
 
 # Install the binary from crates.io.
-cargo install sheathe
+cargo install sheathe-cli
 ```
 
 sheathe doesn't yet do live streaming, trick-play, or WebM input. Those are tracked on the roadmap, each gated behind an oracle validation checkpoint. What ships today is the complete VOD pipeline — the subset that covers ~90% of production packaging work — built in unsafe-free Rust, with no C dependencies, and every output differential-tested against the best open-source packager available.
@@ -208,9 +208,7 @@ sheathe doesn't yet do live streaming, trick-play, or WebM input. Those are trac
 
 A packager needs to know what it's packaging. Resolution, frame rate, codec, bitrate — the numbers that determine how segments get sized and manifests get filled. The default way to get those numbers is to shell out to ffprobe.
 
-sheathe doesn't need to. Its MP4 demuxer reads sample-table metadata directly from the box hierarchy; its MPEG-TS demuxer reconstructs stream descriptions from PAT/PMT/PES headers; its elementary-stream path synthesizes sample entries from the Annex B/ADTS byte stream itself. The `sheathe probe` command returns the same information ffprobe does, with no external binary on the path.
-
-For the full metadata picture — the kind that covers 177+ media formats with byte-identical output to MediaInfoLib — there's [revelo](https://github.com/vbasky/revelo), another pure-Rust project that integrates as a drop-in probe engine. But for the subset a packager actually needs, sheathe is self-contained: the tool that segments video is also the tool that reads it. One binary, one dependency chain, one `cargo install`.
+sheathe doesn't need to. Its MP4 demuxer reads sample-table metadata directly from the box hierarchy; its MPEG-TS demuxer reconstructs stream descriptions from PAT/PMT/PES headers; its elementary-stream path synthesizes sample entries from the Annex B/ADTS byte stream itself. The `sheathe probe` command returns the same information ffprobe does, with no external binary on the path. For the subset a packager actually needs, sheathe is self-contained: the tool that segments video is also the tool that reads it. One binary, one dependency chain, one `cargo install`.
 
 ---
 
@@ -227,5 +225,3 @@ If there's a lesson worth carrying out of this project, it's simpler than the to
 4. **Packaging is infrastructure, not magic.** A packager is a program that reads video, cuts it into pieces, and writes a description of the pieces. Doing it correctly is a lot of work; doing it in pure Rust is less work than you'd think, and the result is safer, simpler, and faster to install than the C++ alternative.
 
 sheathe is open source at [github.com/vbasky/sheathe](https://github.com/vbasky/sheathe), under MIT OR Apache-2.0.
-
-*The author is also building [revelo](https://github.com/vbasky/revelo) (a pure-Rust MediaInfoLib port) and [viser](https://github.com/vbasky/viser) (a content-adaptive video encoding optimizer). The three projects form a suite: probe → ladder → package — the Delivery lane of a pure-Rust media ecosystem, end to end.*

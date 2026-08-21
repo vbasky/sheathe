@@ -1,8 +1,7 @@
 # Conformance & quality gates
 
-sheathe follows the **revelo method**: features are not “done” until their
-bytes are checked against an oracle (Shaka Packager) and, where useful,
-independent tools.
+Features are not “done” until their bytes are checked against an oracle
+(Shaka Packager) and, where useful, independent tools.
 
 ## Built-in gates
 

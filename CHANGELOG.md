@@ -4,6 +4,16 @@ All notable changes to **sheathe** are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/); this project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Changed
+
+- **`sheathe-cli` is the binary crate** (`[[bin]] name = "sheathe"`);
+  `sheathe` is a library facade that re-exports `sheathe-package` and the
+  format crates. Install the CLI with `cargo install sheathe-cli`.
+  **Breaking:** `cargo install sheathe` no longer installs a binary
+  (`sheathe` has no `[[bin]]`).
+
 ## [0.5.0] — 2026-07-18
 
 ### Added

@@ -526,8 +526,16 @@ checksum = "8a7852d02fc848982e0c167ef163aaff9cd91dc640ba85e263cb1ce46fae51cd"
 name = "sheathe"
 version = "0.5.0"
 dependencies = [
- "anyhow",
- "sheathe-cli",
+ "sheathe-core",
+ "sheathe-crypto",
+ "sheathe-dash",
+ "sheathe-es",
+ "sheathe-hls",
+ "sheathe-mkv",
+ "sheathe-mp4",
+ "sheathe-package",
+ "sheathe-text",
+ "sheathe-ts",
 ]
 
 [[package]]

@@ -44,7 +44,7 @@ check-all: fmt-check
 
 # Run the CLI, passing through args:  just run -- 2 3
 run *args:
-    cargo run -p sheathe -- {{args}}
+    cargo run -p sheathe-cli -- {{args}}
 
 # Fetch the real-media oracle corpus into corpus/media/ (see corpus/manifest.toml)
 corpus:

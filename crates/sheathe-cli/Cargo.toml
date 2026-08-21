@@ -6,10 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Pure-Rust HLS/DASH/CMAF media packager"
+description = "CLI for sheathe — pure-Rust HLS/DASH/CMAF media packager"
 keywords.workspace = true
-categories.workspace = true
+categories = ["command-line-utilities", "multimedia", "multimedia::video"]
 readme = "README.md"
+
+# The binary is named after the project (not `-cli`), so `sheathe ...` is the
+# command users run. `doc = false`: the bin target is also named `sheathe`,
+# which would collide with the `sheathe` lib's rustdoc output dir under a
+# workspace `cargo doc` (cargo #6313).
+[[bin]]
+name = "sheathe"
+path = "src/main.rs"
+doc = false
 
 [build-dependencies]
 image.workspace = true

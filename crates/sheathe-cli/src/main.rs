@@ -1,7 +1,7 @@
 //! `sheathe` — pure-Rust HLS/DASH/CMAF media packager.
 //!
-//! The canonical install target (`cargo install sheathe`); the CLI itself lives
-//! in [`sheathe_cli`].
+//! `cargo install sheathe-cli` installs this binary; the CLI implementation
+//! lives in [`sheathe_cli`].
 
 fn main() -> anyhow::Result<()> {
     sheathe_cli::run()

@@ -20,7 +20,7 @@ SHAKA_OUT=$WORKDIR/shaka
 mkdir -p "$SHEATHE_OUT" "$SHAKA_OUT"
 
 echo "→ sheathe package"
-cargo run --quiet -p sheathe -- package "$INPUT" --out "$SHEATHE_OUT" --dash --hls --segment-duration "$SEG"
+cargo run --quiet -p sheathe-cli -- package "$INPUT" --out "$SHEATHE_OUT" --dash --hls --segment-duration "$SEG"
 
 if ! command -v packager >/dev/null 2>&1; then
   echo "⚠ packager not on PATH — skipping Shaka oracle diff" >&2

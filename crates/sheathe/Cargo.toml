@@ -1,25 +1,32 @@
 [package]
 name = "sheathe"
-# The canonical install target: `cargo install sheathe`.
+# Facade crate: `cargo add sheathe`. The CLI is `cargo install sheathe-cli`.
 version = "0.5.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 authors.workspace = true
-description = "Pure-Rust HLS/DASH/CMAF media packager (Shaka Packager alternative) — `sheathe` CLI"
+description = "Pure-Rust HLS/DASH/CMAF media packager — facade crate re-exporting the sheathe library crates"
 keywords.workspace = true
-categories.workspace = true
+categories = ["multimedia", "multimedia::video"]
 readme = "README.md"
 
-# Installs the `sheathe` binary.
-[[bin]]
+[lib]
 name = "sheathe"
-path = "src/main.rs"
+path = "src/lib.rs"
 
 [dependencies]
-sheathe-cli = { workspace = true }
-anyhow.workspace = true
+sheathe-package.workspace = true
+sheathe-core.workspace = true
+sheathe-crypto.workspace = true
+sheathe-mp4.workspace = true
+sheathe-ts.workspace = true
+sheathe-es.workspace = true
+sheathe-mkv.workspace = true
+sheathe-text.workspace = true
+sheathe-dash.workspace = true
+sheathe-hls.workspace = true
 
 [lints]
 workspace = true

@@ -35,7 +35,7 @@ have python3 || { echo "python3 required" >&2; exit 1; }
 [[ -f $MANIFEST ]] || { echo "no manifest at $MANIFEST — run corpus/fetch.sh" >&2; exit 1; }
 
 echo "→ build sheathe"
-cargo build -q -p sheathe 2>&1 | tail -1 || { echo "build failed" >&2; exit 1; }
+cargo build -q -p sheathe-cli 2>&1 | tail -1 || { echo "build failed" >&2; exit 1; }
 
 HAVE_SHAKA=no; have packager && HAVE_SHAKA=yes
 HAVE_CCX=no;   have ccextractor && HAVE_CCX=yes

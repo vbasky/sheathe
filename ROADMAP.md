@@ -4,7 +4,7 @@
 [Shaka Packager](https://github.com/shaka-project/shaka-packager) for the
 features production OTT actually uses.
 
-**Oracle / method (the `revelo method`):** every output is differential-tested
+**Oracle:** every output is differential-tested
 against Shaka Packager (and, where useful, validated by independent tools —
 ffmpeg decode/decrypt, Apple `mediastreamvalidator`, DASH-IF conformance). We do
 not claim a feature "done" until its bytes are verified against the oracle.

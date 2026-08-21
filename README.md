@@ -43,14 +43,16 @@ segment → DASH/HLS manifests, with no C/C++ dependencies.
 | [`sheathe-dash`](crates/sheathe-dash)     | MPEG-DASH `.mpd` generation | `mpd` |
 | [`sheathe-hls`](crates/sheathe-hls)       | HLS master + media playlist generation | `hls` |
 | [`sheathe-crypto`](crates/sheathe-crypto) | Common Encryption (cenc / cbcs) | `media/crypto` |
-| [`sheathe`](crates/sheathe) / [`sheathe-cli`](crates/sheathe-cli) | The `sheathe` binary / its CLI library | `app` (`packager`) |
+| [`sheathe-package`](crates/sheathe-package) | End-to-end pipeline: demux → segment → DASH/HLS | `app` logic |
+| [`sheathe`](crates/sheathe)                 | Facade crate (`cargo add sheathe`) | — |
+| [`sheathe-cli`](crates/sheathe-cli)         | The `sheathe` binary (`cargo install sheathe-cli`) | `app` (`packager`) |
 
 ## Install / build
 
 ```sh
-cargo install sheathe        # installs the `sheathe` binary
+cargo install sheathe-cli    # installs the `sheathe` binary
 # or, from a checkout:
-cargo run -p sheathe -- --help
+cargo run -p sheathe-cli -- --help
 ```
 
 ## Commands
@@ -138,10 +140,9 @@ just corpus                 # fetch checksum-pinned test media
 
 ## Method
 
-Per the workspace's `revelo method`: implement in pure Rust, then
-differential-test output (segments, MPD, playlists) against Shaka Packager on a
-sample corpus. Numbers and bitstreams that can't be validated against the oracle
-don't ship.
+Implement in pure Rust, then differential-test output (segments, MPD, playlists)
+against Shaka Packager on a sample corpus. Numbers and bitstreams that can't be
+validated against the oracle don't ship.
 
 ## MSRV
 

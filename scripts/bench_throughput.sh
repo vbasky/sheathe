@@ -19,7 +19,7 @@ if [[ ! -f "$INPUT" ]]; then
   exit 1
 fi
 
-cargo build -p sheathe --release --quiet
+cargo build -p sheathe-cli --release --quiet
 SHEATHE=target/release/sheathe
 
 bench_sheathe() {
