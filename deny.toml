@@ -7,7 +7,13 @@ yanked = "deny"
 # Only flag unmaintained crates we directly depend on (actionable), not deep
 # transitive crates we don't control.
 unmaintained = "workspace"
-ignore = []
+ignore = [
+    # Marvin timing leak; rsa crate has no constant-time patch. Used only for
+    # optional Widevine/CPIX request signing, not online RSA decryption.
+    { id = "RUSTSEC-2023-0071", reason = "no upstream patch; RSA used for offline request signatures only" },
+    # rcgen (test-only) pulls time < 0.3.47; the patched time crate needs rustc 1.88.
+    { id = "RUSTSEC-2026-0009", reason = "dev-only via rcgen; patched time requires rustc 1.88 > MSRV 1.85" },
+]
 
 [licenses]
 version = 2

@@ -412,8 +412,9 @@ mod tests {
 
         let mut roots = rustls::RootCertStore::empty();
         let pem = fs::read(&cert_path).unwrap();
-        for cert in rustls_pemfile::certs(&mut pem.as_slice()).flatten() {
-            roots.add(cert).unwrap();
+        use rustls_pki_types::pem::PemObject;
+        for cert in rustls_pki_types::CertificateDer::pem_slice_iter(&pem) {
+            roots.add(cert.unwrap()).unwrap();
         }
         let config =
             rustls::ClientConfig::builder().with_root_certificates(roots).with_no_client_auth();

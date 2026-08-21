@@ -6,6 +6,13 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ## [Unreleased]
 
+### Fixed
+
+- **cargo-deny:** drop unmaintained `rustls-pemfile` (use `rustls-pki-types`);
+  ignore unpatched `rsa` Marvin (`RUSTSEC-2023-0071`) for optional CPIX/Widevine
+  signing; HTTPS origin tests generate an ephemeral cert at runtime (no key in
+  the tree).
+
 ## [0.6.1] — 2026-08-22
 
 ### Added

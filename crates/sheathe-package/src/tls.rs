@@ -1,6 +1,7 @@
 //! HTTP(S) client helpers: plain HTTP via std, HTTPS via rustls.
 
 use anyhow::{Context, Result, bail};
+use rustls_pki_types::pem::PemObject;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
@@ -151,7 +152,7 @@ fn tls_wrap(
     root.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
     if let Some(ca) = &opts.ca_file {
         let pem = fs_read(ca)?;
-        for cert in rustls_pemfile::certs(&mut pem.as_slice()).flatten() {
+        for cert in rustls_pki_types::CertificateDer::pem_slice_iter(&pem).flatten() {
             root.add(cert).ok();
         }
     }
@@ -178,20 +179,18 @@ fn tls_wrap(
 }
 
 fn load_certs(path: &std::path::Path) -> Result<Vec<rustls::pki_types::CertificateDer<'static>>> {
-    let pem = fs_read(path)?;
-    rustls_pemfile::certs(&mut pem.as_slice()).collect::<Result<Vec<_>, _>>().context("certs")
+    rustls_pki_types::CertificateDer::pem_file_iter(path)
+        .with_context(|| format!("reading certs {}", path.display()))?
+        .collect::<Result<Vec<_>, _>>()
+        .context("parsing certs")
 }
 
 fn load_key(
     path: &std::path::Path,
     _password: Option<&str>,
 ) -> Result<rustls::pki_types::PrivateKeyDer<'static>> {
-    let pem = fs_read(path)?;
-    let mut cursor = pem.as_slice();
-    if let Ok(Some(k)) = rustls_pemfile::private_key(&mut cursor) {
-        return Ok(k);
-    }
-    bail!("no private key in {}", path.display())
+    rustls_pki_types::PrivateKeyDer::from_pem_file(path)
+        .with_context(|| format!("reading key {}", path.display()))
 }
 
 fn fs_read(path: &std::path::Path) -> Result<Vec<u8>> {

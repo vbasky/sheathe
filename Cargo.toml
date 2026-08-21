@@ -68,7 +68,7 @@ aes = "0.9"
 # TLS for HTTPS push / origin / Widevine+CPIX HTTP. rustls+ring, no OpenSSL.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 webpki-roots = "0.26"
-rustls-pemfile = "2"
+rustls-pki-types = { version = "1.9", default-features = false, features = ["std"] }
 # Widevine request signing (SHA-1 then AES-CBC or RSA PKCS#1).
 sha1 = { version = "0.10", default-features = false, features = ["std"] }
 sha2 = { version = "0.10", default-features = false, features = ["std"] }
