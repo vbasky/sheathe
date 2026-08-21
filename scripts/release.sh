@@ -2,38 +2,20 @@
 #
 # Release sheathe.
 #
-# Binary builds + the GitHub Release happen automatically in CI
-# (.github/workflows/release.yml) when the tag is pushed. This script bumps the
-# workspace version, tags, pushes, and (optionally) publishes to crates.io.
+# This script bumps versions, commits, tags, and pushes. Binary builds, the
+# GitHub Release, and crates.io publish happen in CI
+# (`.github/workflows/release.yml`) when the tag is pushed.
 #
-# Usage:   ./scripts/release.sh <version>          e.g. ./scripts/release.sh 0.2.0
-#          PUBLISH=1 ./scripts/release.sh 0.2.0     also publish to crates.io
+# Usage:   ./scripts/release.sh <version>          e.g. ./scripts/release.sh 0.6.0
 #
 # Prerequisites: on `main`, clean working tree, CHANGELOG.md updated for <version>.
 
 set -euo pipefail
 
-VERSION="${1:?usage: scripts/release.sh <version>   e.g. 0.2.0}"
+VERSION="${1:?usage: scripts/release.sh <version>   e.g. 0.6.0}"
 TAG="v${VERSION}"
-PUBLISH="${PUBLISH:-0}"
 
 cd "$(git rev-parse --show-toplevel)"
-
-# Crates in dependency order: a crate must follow everything it depends on.
-CRATES=(
-    sheathe-core
-    sheathe-crypto
-    sheathe-text
-    sheathe-ts
-    sheathe-es
-    sheathe-mkv
-    sheathe-mp4
-    sheathe-dash
-    sheathe-hls
-    sheathe-package
-    sheathe-cli
-    sheathe
-)
 
 # ── pre-flight ──────────────────────────────────────────────────────────────
 [ "$(git rev-parse --abbrev-ref HEAD)" = "main" ] || { echo "✗ not on main"; exit 1; }
@@ -52,21 +34,12 @@ perl -i -pe "s/(path = \"crates\/[^\"]+\", version = \")[^\"]+/\${1}${VERSION}/g
 
 cargo build --workspace   # validate the manifests compile before tagging
 
-# ── commit, tag, push (triggers CI binary build + GitHub Release) ───────────
-git add Cargo.toml crates/*/Cargo.toml CHANGELOG.md
+# ── commit, tag, push (triggers CI: binaries, GitHub Release, crates.io) ────
+git add Cargo.toml Cargo.lock crates/*/Cargo.toml CHANGELOG.md
 git commit -m "release: ${TAG}"
 git tag -a "${TAG}" -m "sheathe ${VERSION}"
 git push origin main
 git push origin "${TAG}"
-echo "==> tag pushed — CI is building binaries and creating the GitHub Release"
-
-# ── optional: publish to crates.io in dependency order ──────────────────────
-if [ "$PUBLISH" = "1" ]; then
-    for c in "${CRATES[@]}"; do
-        echo "==> cargo publish ${c}@${VERSION}"
-        cargo publish -p "${c}"
-    done
-    echo "✓ published sheathe ${VERSION} to crates.io"
-fi
+echo "==> tag pushed — CI is building binaries, creating the GitHub Release, and publishing crates.io"
 
 echo "✓ released sheathe ${TAG}"

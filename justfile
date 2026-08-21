@@ -66,8 +66,10 @@ bench input='corpus/media/bear-1280x720.mp4' runs='5':
 deny:
     cargo deny check
 
-# Release a version: bump → test → tag → push (CI builds binaries + GitHub Release).
-# Usage: just release 0.2.0     (set PUBLISH=1 to also publish to crates.io)
+# Release a version: bump → test → tag → push.
+# CI (`.github/workflows/release.yml`) builds binaries, creates the GitHub
+# Release, and publishes crates.io.
+# Usage: just release 0.6.0
 release version:
     ./scripts/release.sh {{version}}
 

@@ -96,3 +96,84 @@ jobs:
           body_path: /tmp/release-notes.md
           files: /tmp/assets/*
           fail_on_unmatched_files: true
+
+  publish:
+    name: Publish to crates.io
+    needs: [release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+      VERSION: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install Rust
+        run: rustup update stable --no-self-update
+
+      - name: Publish crates in dependency order
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          version="${VERSION#v}"
+          # A crate must appear after every crate it depends on.
+          crates=(
+            sheathe-core
+            sheathe-crypto
+            sheathe-text
+            sheathe-ts
+            sheathe-es
+            sheathe-mkv
+            sheathe-mp4
+            sheathe-dash
+            sheathe-hls
+            sheathe-package
+            sheathe-cli
+            sheathe
+          )
+
+          already_published() {
+            local crate="$1"
+            local v="$2"
+            local status
+            status=$(curl -sS -o /dev/null -w "%{http_code}" \
+              -A "sheathe-release-bot (https://github.com/${{ github.repository }})" \
+              "https://crates.io/api/v1/crates/${crate}/${v}")
+            [[ "$status" == "200" ]]
+          }
+
+          publish_with_retries() {
+            local crate="$1"
+            local attempts=5
+            local delay=20
+
+            if already_published "$crate" "$version"; then
+              echo "==> ${crate} ${version} already on crates.io — skipping"
+              return 0
+            fi
+
+            for attempt in $(seq 1 "$attempts"); do
+              echo "==> Publishing ${crate} ${version} (attempt ${attempt}/${attempts})"
+              output=$(cargo publish -p "$crate" --locked 2>&1) && return 0
+
+              if echo "$output" | grep -q "already exists\|already uploaded"; then
+                echo "==> ${crate} ${version} already published"
+                return 0
+              fi
+
+              echo "$output" >&2
+
+              if [[ "$attempt" -lt "$attempts" ]]; then
+                echo "==> Waiting ${delay}s before retry"
+                sleep "$delay"
+              fi
+            done
+
+            echo "ERROR: failed to publish ${crate} ${version} after ${attempts} attempts" >&2
+            return 1
+          }
+
+          for crate in "${crates[@]}"; do
+            publish_with_retries "$crate"
+          done

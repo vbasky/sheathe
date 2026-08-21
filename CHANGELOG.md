@@ -13,6 +13,9 @@ All notable changes to **sheathe** are documented here. The format is based on
   format crates. Install the CLI with `cargo install sheathe-cli`.
   **Breaking:** `cargo install sheathe` no longer installs a binary
   (`sheathe` has no `[[bin]]`).
+- **crates.io publish is part of the GitHub Release workflow.** Pushing a
+  `v*` tag builds binaries, creates the GitHub Release, and publishes
+  crates in dependency order (skipping versions already on crates.io).
 
 ## [0.5.0] — 2026-07-18
 
