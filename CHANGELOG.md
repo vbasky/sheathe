@@ -8,6 +8,9 @@ All notable changes to **sheathe** are documented here. The format is based on
 
 ### Fixed
 
+- **cargo-deny:** bump `rustls` to 0.23.45 for
+  [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  (TLS 1.3 handshake messages accepted across encryption-level boundaries).
 - **cargo-deny:** drop unmaintained `rustls-pemfile` (use `rustls-pki-types`);
   ignore unpatched `rsa` Marvin (`RUSTSEC-2023-0071`) for optional CPIX/Widevine
   signing; HTTPS origin tests generate an ephemeral cert at runtime (no key in
