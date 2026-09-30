@@ -60,14 +60,14 @@ sheathe = { path = "crates/sheathe", version = "0.6.1" }
 thiserror = "2"
 anyhow = "1"
 clap = { version = "4", features = ["derive", "wrap_help"] }
-base64 = "0.22"
+base64 = "0.23"
 crossterm = "0.29"
 image = { version = "0.25", default-features = false, features = ["png"] }
 # Pure-Rust AES block cipher (RustCrypto); CTR/CBC modes implemented in-crate.
 aes = "0.9"
 # TLS for HTTPS push / origin / Widevine+CPIX HTTP. rustls+ring, no OpenSSL.
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
-webpki-roots = "0.26"
+webpki-roots = "1.0"
 rustls-pki-types = { version = "1.9", default-features = false, features = ["std"] }
 # Widevine request signing (SHA-1 then AES-CBC or RSA PKCS#1).
 sha1 = { version = "0.10", default-features = false, features = ["std"] }
